@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Movies Local</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>Movies Local</h1>
+    <p>Add movies and shows with friends on the same network.</p>
+  </header>
+
+  <main class="app-main">
+    <section class="identity-card">
+      <label for="display-name">Your name</label>
+      <input id="display-name" type="text" placeholder="How should we credit you?" autocomplete="name">
+      <button id="save-display-name" class="primary">Save</button>
+      <p class="identity-hint">We will store your name in this browser only.</p>
+    </section>
+
+    <section class="search-card">
+      <form id="search-form">
+        <label for="search-query">Search IMDB</label>
+        <div class="search-group">
+          <input id="search-query" type="search" placeholder="e.g. The Matrix" required minlength="2">
+          <select id="search-type">
+            <option value="">All</option>
+            <option value="movie">Movies</option>
+            <option value="series">Series</option>
+          </select>
+          <button type="submit" class="primary">Search</button>
+        </div>
+      </form>
+      <div id="search-feedback" role="status" aria-live="polite"></div>
+      <ul id="search-results" class="card-list"></ul>
+    </section>
+
+    <section class="list-card">
+      <header class="section-header">
+        <h2>Shared list</h2>
+        <button id="refresh-movies" class="secondary">Refresh</button>
+      </header>
+      <ul id="movies-list" class="card-list"></ul>
+    </section>
+  </main>
+
+  <template id="result-item-template">
+    <li class="result-card">
+      <div class="result-meta">
+        <div class="result-poster"></div>
+        <div class="result-details">
+          <h3 class="result-title"></h3>
+          <p class="result-year"></p>
+        </div>
+      </div>
+      <button class="primary add-button">Add</button>
+    </li>
+  </template>
+
+  <template id="movie-item-template">
+    <li class="movie-card">
+      <div class="movie-main">
+        <h3 class="movie-title"></h3>
+        <p class="movie-meta"></p>
+      </div>
+      <p class="movie-added"></p>
+    </li>
+  </template>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
