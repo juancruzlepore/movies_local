@@ -63,10 +63,11 @@ impl Storage {
             created_at: Utc::now(),
         };
 
-        let mut guard = self.inner.write();
-        guard.push(movie.clone());
-        let snapshot = guard.clone();
-        drop(guard);
+        let snapshot = {
+            let mut guard = self.inner.write();
+            guard.push(movie.clone());
+            guard.clone()
+        };
 
         self.persist(&snapshot).await?;
 

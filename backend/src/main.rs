@@ -7,13 +7,15 @@ use std::sync::Arc;
 use std::{env, time::Duration};
 
 use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::http::{Method, StatusCode};
+use axum::routing::get;
 use axum::{Json, Router};
 use error::AppError;
 use models::{Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem};
 use storage::Storage;
+use tokio::net::TcpListener;
 use tokio::signal;
+use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
 
 #[derive(Clone)]
@@ -41,7 +43,9 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let storage = Storage::initialise(data_path.into()).await?;
     let client = reqwest::Client::builder()
+        .use_rustls_tls()
         .timeout(Duration::from_secs(10))
+        .user_agent("movies-local-backend/0.1")
         .build()?;
 
     let state = AppState {
@@ -50,17 +54,24 @@ async fn main() -> Result<(), anyhow::Error> {
         omdb_api_key,
     };
 
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers(Any);
+
     let app = Router::new()
         .route("/health", get(health))
         .route("/movies", get(list_movies).post(add_movie))
         .route("/search", get(search_movies))
-        .with_state(state);
+        .with_state(state)
+        .layer(cors);
 
     let addr: SocketAddr = bind_addr.parse()?;
-    info!("listening on {addr}");
+    let listener = TcpListener::bind(addr).await?;
+    let local_addr = listener.local_addr()?;
+    info!("listening on {local_addr}");
 
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
+    axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
@@ -116,10 +127,27 @@ async fn search_movies(
     Query(params): Query<SearchParams>,
 ) -> Result<Json<SearchResponse>, AppError> {
     if params.query.trim().is_empty() {
-        return Err(AppError::BadRequest("query parameter cannot be empty".into()));
+        return Err(AppError::BadRequest(
+            "query parameter cannot be empty".into(),
+        ));
     }
 
-    let response = state.search_omdb(&params).await?;
+    info!(
+        "search requested query='{}' media_type={:?}",
+        params.query, params.media_type
+    );
+
+    let response = match state.search_omdb(&params).await {
+        Ok(payload) => payload,
+        Err(err) => {
+            warn!(
+                "search failed query='{}' media_type={:?}: {}",
+                params.query, params.media_type, err
+            );
+            return Err(err);
+        }
+    };
+
     Ok(Json(response))
 }
 
@@ -164,10 +192,9 @@ impl AppState {
             )));
         }
 
-        let payload: models::OmdbSearchResponse = response
-            .json()
-            .await
-            .map_err(|err| AppError::Downstream(format!("failed to decode omdb response: {err}")))?;
+        let payload: models::OmdbSearchResponse = response.json().await.map_err(|err| {
+            AppError::Downstream(format!("failed to decode omdb response: {err}"))
+        })?;
 
         if payload.response.eq_ignore_ascii_case("true") {
             let results = payload
