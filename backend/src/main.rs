@@ -11,7 +11,7 @@ use axum::http::{Method, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use error::AppError;
-use models::{Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem};
+use models::{Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem, VoteRequest};
 use storage::Storage;
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -127,8 +127,12 @@ async fn add_movie(
 async fn vote_movie(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    Json(payload): Json<VoteRequest>,
 ) -> Result<Json<Movie>, AppError> {
-    match state.storage.vote(id).await? {
+    validate_vote(&payload)?;
+    let voter = payload.voter.trim().to_string();
+
+    match state.storage.vote(id, voter).await? {
         Some(movie) => Ok(Json(movie)),
         None => Err(AppError::NotFound("movie not found".into())),
     }
@@ -172,6 +176,13 @@ fn validate_new_movie(payload: &NewMovie) -> Result<(), AppError> {
     }
     if payload.added_by.trim().is_empty() {
         return Err(AppError::BadRequest("added_by cannot be empty".into()));
+    }
+    Ok(())
+}
+
+fn validate_vote(payload: &VoteRequest) -> Result<(), AppError> {
+    if payload.voter.trim().is_empty() {
+        return Err(AppError::BadRequest("voter cannot be empty".into()));
     }
     Ok(())
 }

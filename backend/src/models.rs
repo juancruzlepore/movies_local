@@ -20,6 +20,8 @@ pub struct Movie {
     pub plot: Option<String>,
     #[serde(default)]
     pub votes: u32,
+    #[serde(default)]
+    pub voters: Vec<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -38,6 +40,11 @@ pub struct NewMovie {
     pub notes: Option<String>,
     #[serde(default)]
     pub plot: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VoteRequest {
+    pub voter: String,
 }
 
 #[derive(Debug, Deserialize)]
