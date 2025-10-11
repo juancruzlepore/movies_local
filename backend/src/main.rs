@@ -6,9 +6,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::{env, time::Duration};
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{Method, StatusCode};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use error::AppError;
 use models::{Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem};
@@ -17,6 +17,7 @@ use tokio::net::TcpListener;
 use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
+use uuid::Uuid;
 
 #[derive(Clone)]
 struct AppState {
@@ -62,6 +63,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/movies", get(list_movies).post(add_movie))
+        .route("/movies/:id/votes", post(vote_movie))
         .route("/search", get(search_movies))
         .with_state(state)
         .layer(cors);
@@ -120,6 +122,16 @@ async fn add_movie(
     validate_new_movie(&payload)?;
     let movie = state.storage.add(payload).await?;
     Ok((StatusCode::CREATED, Json(movie)))
+}
+
+async fn vote_movie(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Movie>, AppError> {
+    match state.storage.vote(id).await? {
+        Some(movie) => Ok(Json(movie)),
+        None => Err(AppError::NotFound("movie not found".into())),
+    }
 }
 
 async fn search_movies(
