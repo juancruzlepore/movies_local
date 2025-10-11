@@ -18,6 +18,8 @@ pub struct Movie {
     pub notes: Option<String>,
     #[serde(default)]
     pub plot: Option<String>,
+    #[serde(default)]
+    pub votes: u32,
     pub created_at: DateTime<Utc>,
 }
 

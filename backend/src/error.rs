@@ -17,6 +17,8 @@ pub enum AppError {
     BadRequest(String),
     #[error("{0}")]
     Configuration(String),
+    #[error("{0}")]
+    NotFound(String),
     #[error(transparent)]
     Storage(#[from] StorageError),
     #[error("{0}")]
@@ -28,6 +30,7 @@ impl IntoResponse for AppError {
         let status = match &self {
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::Configuration(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            AppError::NotFound(_) => StatusCode::NOT_FOUND,
             AppError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::Downstream(_) => StatusCode::BAD_GATEWAY,
         };

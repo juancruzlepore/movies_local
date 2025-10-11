@@ -87,6 +87,13 @@ function renderMovies(movies) {
     const timestamp = movie.created_at ? formatTimestamp(movie.created_at) : '';
     element.querySelector('.movie-added').textContent = `${added}${timestamp ? ` • ${timestamp}` : ''}`;
 
+    const voteButton = element.querySelector('.vote-button');
+    const votesLabel = element.querySelector('.movie-votes');
+    votesLabel.textContent = formatVotes(movie.votes ?? 0);
+    voteButton.addEventListener('click', () =>
+      voteForMovie(movie.id, voteButton, votesLabel),
+    );
+
     fragment.appendChild(element);
   }
   moviesList.appendChild(fragment);
@@ -196,6 +203,38 @@ function normalisePoster(value) {
 
 function capitalise(value = '') {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatVotes(votes = 0) {
+  return votes === 1 ? '1 vote' : `${votes} votes`;
+}
+
+async function voteForMovie(movieId, button, votesLabel) {
+  if (!movieId) return;
+
+  button.disabled = true;
+  setFeedback('Recording your vote…');
+
+  try {
+    const response = await fetch(`${API_BASE}/movies/${movieId}/votes`, {
+      method: 'POST',
+    });
+
+    if (!response.ok) {
+      const problem = await safeJson(response);
+      throw new Error(problem?.message || `Vote failed with ${response.status}`);
+    }
+
+    const updated = await response.json();
+    const votes = updated.votes ?? 0;
+    votesLabel.textContent = formatVotes(votes);
+    setFeedback('Thanks for voting!');
+  } catch (error) {
+    console.error(error);
+    setFeedback(error.message || 'Unable to register your vote.');
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function setFeedback(text) {

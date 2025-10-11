@@ -60,6 +60,7 @@ impl Storage {
             media_type: request.media_type,
             notes: request.notes,
             plot: request.plot,
+            votes: 0,
             created_at: Utc::now(),
         };
 
@@ -70,6 +71,24 @@ impl Storage {
         };
 
         self.persist(&snapshot).await?;
+
+        Ok(movie)
+    }
+
+    pub async fn vote(&self, id: Uuid) -> Result<Option<Movie>, StorageError> {
+        let (movie, snapshot) = {
+            let mut guard = self.inner.write();
+            if let Some(movie) = guard.iter_mut().find(|item| item.id == id) {
+                movie.votes = movie.votes.saturating_add(1);
+                (Some(movie.clone()), Some(guard.clone()))
+            } else {
+                (None, None)
+            }
+        };
+
+        if let Some(data) = snapshot {
+            self.persist(&data).await?;
+        }
 
         Ok(movie)
     }
