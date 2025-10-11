@@ -181,6 +181,40 @@ button:disabled {
   object-fit: cover;
 }
 
+.movie-card {
+  grid-template-columns: auto 1fr;
+  gap: 1rem;
+}
+
+.movie-poster {
+  width: 72px;
+  height: 108px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(148, 163, 184, 0.3);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  color: rgba(248, 250, 252, 0.7);
+  text-align: center;
+  padding: 0.5rem;
+}
+
+.movie-poster img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.movie-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
 .result-details h3,
 .movie-main h3 {
   margin: 0;
