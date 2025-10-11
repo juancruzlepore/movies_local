@@ -67,6 +67,22 @@ function renderMovies(movies) {
     if (movie.media_type) metaParts.push(capitalise(movie.media_type));
     element.querySelector('.movie-meta').textContent = metaParts.join(' • ');
 
+    const posterContainer = element.querySelector('.movie-poster');
+    const posterUrl = normalisePoster(movie.poster_url);
+    if (posterUrl) {
+      posterContainer.innerHTML = '';
+      const img = document.createElement('img');
+      img.src = posterUrl;
+      img.alt = `${movie.title} Poster`;
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      posterContainer.appendChild(img);
+      posterContainer.removeAttribute('aria-hidden');
+    } else {
+      posterContainer.textContent = 'No poster yet';
+      posterContainer.setAttribute('aria-hidden', 'true');
+    }
+
     const added = movie.added_by ? `${movie.added_by}` : 'Unknown friend';
     const timestamp = movie.created_at ? formatTimestamp(movie.created_at) : '';
     element.querySelector('.movie-added').textContent = `${added}${timestamp ? ` • ${timestamp}` : ''}`;
