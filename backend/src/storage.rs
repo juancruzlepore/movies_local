@@ -61,6 +61,7 @@ impl Storage {
             notes: request.notes,
             plot: request.plot,
             votes: 0,
+            voters: Vec::new(),
             created_at: Utc::now(),
         };
 
@@ -75,10 +76,11 @@ impl Storage {
         Ok(movie)
     }
 
-    pub async fn vote(&self, id: Uuid) -> Result<Option<Movie>, StorageError> {
+    pub async fn vote(&self, id: Uuid, voter: String) -> Result<Option<Movie>, StorageError> {
         let (movie, snapshot) = {
             let mut guard = self.inner.write();
             if let Some(movie) = guard.iter_mut().find(|item| item.id == id) {
+                movie.voters.push(voter);
                 movie.votes = movie.votes.saturating_add(1);
                 (Some(movie.clone()), Some(guard.clone()))
             } else {

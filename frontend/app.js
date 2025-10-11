@@ -212,12 +212,23 @@ function formatVotes(votes = 0) {
 async function voteForMovie(movieId, button, votesLabel) {
   if (!movieId) return;
 
+  const voter = displayNameInput.value.trim();
+  if (!voter) {
+    setFeedback('Save your name before voting.');
+    displayNameInput.focus();
+    return;
+  }
+
   button.disabled = true;
   setFeedback('Recording your vote…');
 
   try {
     const response = await fetch(`${API_BASE}/movies/${movieId}/votes`, {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ voter }),
     });
 
     if (!response.ok) {
