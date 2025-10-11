@@ -104,3 +104,80 @@ impl Storage {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::NewMovie;
+    use tokio::fs;
+
+    fn temp_storage_path() -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("movies-local-{}.json", Uuid::new_v4()));
+        path
+    }
+
+    fn sample_movie_request() -> NewMovie {
+        NewMovie {
+            title: "The Matrix".to_string(),
+            imdb_id: "tt0133093".to_string(),
+            added_by: "neo".to_string(),
+            poster_url: Some("http://example.com/poster.jpg".to_string()),
+            year: Some("1999".to_string()),
+            media_type: Some("movie".to_string()),
+            notes: Some("Follow the white rabbit.".to_string()),
+            plot: Some("A hacker discovers reality is a simulation.".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn add_persists_movie() {
+        let path = temp_storage_path();
+        let storage = Storage::initialise(path.clone()).await.expect("init storage");
+
+        let movie = storage
+            .add(sample_movie_request())
+            .await
+            .expect("add movie");
+
+        let all_movies = storage.list();
+        assert_eq!(all_movies.len(), 1);
+        assert_eq!(all_movies[0].title, "The Matrix");
+        assert_eq!(movie.id, all_movies[0].id);
+
+        let persisted = fs::read(&path).await.expect("read persisted file");
+        assert!(!persisted.is_empty());
+
+        let parsed: Vec<Movie> = serde_json::from_slice(&persisted).expect("parse persisted data");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].title, "The Matrix");
+        assert_eq!(parsed[0].imdb_id, "tt0133093");
+    }
+
+    #[tokio::test]
+    async fn vote_updates_movie_and_persists() {
+        let path = temp_storage_path();
+        let storage = Storage::initialise(path.clone()).await.expect("init storage");
+
+        let movie = storage
+            .add(sample_movie_request())
+            .await
+            .expect("add movie");
+
+        let updated = storage
+            .vote(movie.id, "trinity".to_string())
+            .await
+            .expect("vote movie");
+
+        let updated = updated.expect("movie should exist");
+        assert_eq!(updated.votes, 1);
+        assert_eq!(updated.voters.len(), 1);
+        assert_eq!(updated.voters[0].voter, "trinity");
+
+        let persisted = fs::read(&path).await.expect("read persisted file");
+        let parsed: Vec<Movie> = serde_json::from_slice(&persisted).expect("parse persisted data");
+        assert_eq!(parsed[0].votes, 1);
+        assert_eq!(parsed[0].voters.len(), 1);
+        assert_eq!(parsed[0].voters[0].voter, "trinity");
+    }
+}
