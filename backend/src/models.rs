@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -20,8 +21,8 @@ pub struct Movie {
     pub plot: Option<String>,
     #[serde(default)]
     pub votes: u32,
-    #[serde(default)]
-    pub voters: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_votes")]
+    pub voters: Vec<VoteRecord>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -45,6 +46,13 @@ pub struct NewMovie {
 #[derive(Debug, Deserialize)]
 pub struct VoteRequest {
     pub voter: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoteRecord {
+    pub voter: String,
+    #[serde(default)]
+    pub voted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,4 +114,28 @@ impl SearchResultItem {
             poster_url: item.poster_url,
         }
     }
+}
+
+fn deserialize_votes<'de, D>(deserializer: D) -> Result<Vec<VoteRecord>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum VoteItem {
+        Record(VoteRecord),
+        Name(String),
+    }
+
+    let items = Vec::<VoteItem>::deserialize(deserializer)?;
+    Ok(items
+        .into_iter()
+        .map(|item| match item {
+            VoteItem::Record(record) => record,
+            VoteItem::Name(name) => VoteRecord {
+                voter: name,
+                voted_at: None,
+            },
+        })
+        .collect())
 }

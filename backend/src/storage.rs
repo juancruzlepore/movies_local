@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use parking_lot::RwLock;
 use tokio::fs;
 
-use crate::models::{Movie, NewMovie};
+use crate::models::{Movie, NewMovie, VoteRecord};
 use chrono::Utc;
 use thiserror::Error;
 use uuid::Uuid;
@@ -80,7 +80,10 @@ impl Storage {
         let (movie, snapshot) = {
             let mut guard = self.inner.write();
             if let Some(movie) = guard.iter_mut().find(|item| item.id == id) {
-                movie.voters.push(voter);
+                movie.voters.push(VoteRecord {
+                    voter,
+                    voted_at: Some(Utc::now()),
+                });
                 movie.votes = movie.votes.saturating_add(1);
                 (Some(movie.clone()), Some(guard.clone()))
             } else {
