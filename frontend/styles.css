@@ -64,6 +64,22 @@ section {
   gap: 1rem;
 }
 
+.shared-lists {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.list-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.list-subtitle {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
 .identity-card label,
 .search-card label {
   font-weight: 600;
@@ -273,5 +289,10 @@ button:disabled {
 
   .list-card {
     flex: 1 1 100%;
+  }
+
+  .shared-lists {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.5rem;
   }
 }

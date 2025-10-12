@@ -42,7 +42,16 @@
         <h2>Shared list</h2>
         <button id="refresh-movies" class="secondary">Refresh</button>
       </header>
-      <ul id="movies-list" class="card-list"></ul>
+      <div class="shared-lists">
+        <section class="list-subsection">
+          <h3 class="list-subtitle">Top picks</h3>
+          <ul id="movies-list-by-votes" class="card-list"></ul>
+        </section>
+        <section class="list-subsection">
+          <h3 class="list-subtitle">Newest additions</h3>
+          <ul id="movies-list-by-recent" class="card-list"></ul>
+        </section>
+      </div>
     </section>
   </main>
 

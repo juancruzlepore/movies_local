@@ -7,7 +7,8 @@ const searchInput = document.querySelector('#search-query');
 const searchTypeSelect = document.querySelector('#search-type');
 const searchResultsList = document.querySelector('#search-results');
 const searchFeedback = document.querySelector('#search-feedback');
-const moviesList = document.querySelector('#movies-list');
+const moviesListByVotes = document.querySelector('#movies-list-by-votes');
+const moviesListByRecent = document.querySelector('#movies-list-by-recent');
 const refreshMoviesButton = document.querySelector('#refresh-movies');
 
 const resultTemplate = document.querySelector('#result-item-template');
@@ -30,8 +31,13 @@ function hydrateDisplayName() {
   }
 }
 
-async function fetchMovies() {
-  setFeedback('Loading shared list…');
+async function fetchMovies(options = {}) {
+  const { showLoading = true } = options;
+
+  if (showLoading) {
+    setFeedback('Loading shared list…');
+  }
+
   try {
     const response = await fetch(`${API_BASE}/movies`);
     if (!response.ok) {
@@ -39,7 +45,9 @@ async function fetchMovies() {
     }
     const data = await response.json();
     renderMovies(data);
-    setFeedback('');
+    if (showLoading) {
+      setFeedback('');
+    }
   } catch (error) {
     console.error(error);
     setFeedback('Unable to load shared list. Check the server.');
@@ -47,56 +55,90 @@ async function fetchMovies() {
 }
 
 function renderMovies(movies) {
-  moviesList.innerHTML = '';
+  const moviesByVotes = [...movies].sort((a, b) => {
+    const voteDiff = (b.votes ?? 0) - (a.votes ?? 0);
+    if (voteDiff !== 0) return voteDiff;
+    const titleA = a.title ?? '';
+    const titleB = b.title ?? '';
+    return titleA.localeCompare(titleB);
+  });
+
+  const moviesByRecent = [...movies].sort((a, b) => {
+    const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+    if (timeA === timeB) {
+      const titleA = a.title ?? '';
+      const titleB = b.title ?? '';
+      return titleA.localeCompare(titleB);
+    }
+    return timeB - timeA;
+  });
+
+  renderMovieList(moviesListByVotes, moviesByVotes);
+  renderMovieList(moviesListByRecent, moviesByRecent);
+}
+
+function renderMovieList(container, movies) {
+  container.innerHTML = '';
 
   if (!movies.length) {
     const empty = document.createElement('p');
     empty.textContent = 'Nothing here yet. Find something great to watch!';
     empty.className = 'movie-empty';
-    moviesList.append(empty);
+    container.append(empty);
     return;
   }
 
   const fragment = document.createDocumentFragment();
   for (const movie of movies) {
-    const element = movieTemplate.content.cloneNode(true);
-    element.querySelector('.movie-title').textContent = movie.title;
-
-    const metaParts = [];
-    if (movie.year) metaParts.push(movie.year);
-    if (movie.media_type) metaParts.push(capitalise(movie.media_type));
-    element.querySelector('.movie-meta').textContent = metaParts.join(' • ');
-
-    const posterContainer = element.querySelector('.movie-poster');
-    const posterUrl = normalisePoster(movie.poster_url);
-    if (posterUrl) {
-      posterContainer.innerHTML = '';
-      const img = document.createElement('img');
-      img.src = posterUrl;
-      img.alt = `${movie.title} Poster`;
-      img.loading = 'lazy';
-      img.decoding = 'async';
-      posterContainer.appendChild(img);
-      posterContainer.removeAttribute('aria-hidden');
-    } else {
-      posterContainer.textContent = 'No poster yet';
-      posterContainer.setAttribute('aria-hidden', 'true');
-    }
-
-    const added = movie.added_by ? `${movie.added_by}` : 'Unknown friend';
-    const timestamp = movie.created_at ? formatTimestamp(movie.created_at) : '';
-    element.querySelector('.movie-added').textContent = `${added}${timestamp ? ` • ${timestamp}` : ''}`;
-
-    const voteButton = element.querySelector('.vote-button');
-    const votesLabel = element.querySelector('.movie-votes');
-    votesLabel.textContent = formatVotes(movie.votes ?? 0);
-    voteButton.addEventListener('click', () =>
-      voteForMovie(movie.id, voteButton, votesLabel),
-    );
-
-    fragment.appendChild(element);
+    fragment.append(buildMovieElement(movie));
   }
-  moviesList.appendChild(fragment);
+
+  container.append(fragment);
+}
+
+function buildMovieElement(movie) {
+  const element = movieTemplate.content.cloneNode(true);
+  const movieCard = element.querySelector('.movie-card');
+  if (movieCard && movie.id) {
+    movieCard.dataset.movieId = movie.id;
+  }
+
+  element.querySelector('.movie-title').textContent = movie.title;
+
+  const metaParts = [];
+  if (movie.year) metaParts.push(movie.year);
+  if (movie.media_type) metaParts.push(capitalise(movie.media_type));
+  element.querySelector('.movie-meta').textContent = metaParts.join(' • ');
+
+  const posterContainer = element.querySelector('.movie-poster');
+  const posterUrl = normalisePoster(movie.poster_url);
+  if (posterUrl) {
+    posterContainer.innerHTML = '';
+    const img = document.createElement('img');
+    img.src = posterUrl;
+    img.alt = `${movie.title} Poster`;
+    img.loading = 'lazy';
+    img.decoding = 'async';
+    posterContainer.appendChild(img);
+    posterContainer.removeAttribute('aria-hidden');
+  } else {
+    posterContainer.textContent = 'No poster yet';
+    posterContainer.setAttribute('aria-hidden', 'true');
+  }
+
+  const added = movie.added_by ? `${movie.added_by}` : 'Unknown friend';
+  const timestamp = movie.created_at ? formatTimestamp(movie.created_at) : '';
+  element.querySelector('.movie-added').textContent = `${added}${timestamp ? ` • ${timestamp}` : ''}`;
+
+  const voteButton = element.querySelector('.vote-button');
+  const votesLabel = element.querySelector('.movie-votes');
+  votesLabel.textContent = formatVotes(movie.votes ?? 0);
+  voteButton.addEventListener('click', () =>
+    voteForMovie(movie.id, voteButton, votesLabel),
+  );
+
+  return element;
 }
 
 async function searchMovies(query, mediaType) {
@@ -182,7 +224,7 @@ async function addMovie(result) {
     }
 
     setFeedback('Added to the list!');
-    await fetchMovies();
+    await fetchMovies({ showLoading: false });
   } catch (error) {
     console.error(error);
     setFeedback(error.message || 'Unable to add the movie.');
@@ -240,6 +282,7 @@ async function voteForMovie(movieId, button, votesLabel) {
     const votes = updated.votes ?? 0;
     votesLabel.textContent = formatVotes(votes);
     setFeedback('Thanks for voting!');
+    await fetchMovies({ showLoading: false });
   } catch (error) {
     console.error(error);
     setFeedback(error.message || 'Unable to register your vote.');
