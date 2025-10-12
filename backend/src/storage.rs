@@ -133,7 +133,9 @@ mod tests {
     #[tokio::test]
     async fn add_persists_movie() {
         let path = temp_storage_path();
-        let storage = Storage::initialise(path.clone()).await.expect("init storage");
+        let storage = Storage::initialise(path.clone())
+            .await
+            .expect("init storage");
 
         let movie = storage
             .add(sample_movie_request())
@@ -157,7 +159,9 @@ mod tests {
     #[tokio::test]
     async fn vote_updates_movie_and_persists() {
         let path = temp_storage_path();
-        let storage = Storage::initialise(path.clone()).await.expect("init storage");
+        let storage = Storage::initialise(path.clone())
+            .await
+            .expect("init storage");
 
         let movie = storage
             .add(sample_movie_request())

@@ -10,11 +10,14 @@ const searchFeedback = document.querySelector('#search-feedback');
 const moviesListByVotes = document.querySelector('#movies-list-by-votes');
 const moviesListByRecent = document.querySelector('#movies-list-by-recent');
 const refreshMoviesButton = document.querySelector('#refresh-movies');
+const dailyVoteCounter = document.querySelector('#daily-vote-count');
 
 const resultTemplate = document.querySelector('#result-item-template');
 const movieTemplate = document.querySelector('#movie-item-template');
 
 const STORAGE_KEY = 'movies-local-display-name';
+
+let latestMovies = [];
 
 function getDisplayName() {
   return localStorage.getItem(STORAGE_KEY) || '';
@@ -44,13 +47,18 @@ async function fetchMovies(options = {}) {
       throw new Error(`Server responded with ${response.status}`);
     }
     const data = await response.json();
-    renderMovies(data);
+    latestMovies = Array.isArray(data) ? data : [];
+    renderMovies(latestMovies);
+    updateDailyVoteCount(latestMovies);
     if (showLoading) {
       setFeedback('');
     }
   } catch (error) {
     console.error(error);
     setFeedback('Unable to load shared list. Check the server.');
+    if (dailyVoteCounter) {
+      dailyVoteCounter.textContent = 'Unable to load vote history right now.';
+    }
   }
 }
 
@@ -251,6 +259,51 @@ function formatVotes(votes = 0) {
   return votes === 1 ? '1 vote' : `${votes} votes`;
 }
 
+function updateDailyVoteCount(movies = []) {
+  if (!dailyVoteCounter) return;
+
+  const voter = displayNameInput.value.trim();
+  if (!voter) {
+    dailyVoteCounter.textContent = 'Save your name to track your votes today.';
+    return;
+  }
+
+  const votesToday = countVotesForToday(movies, voter);
+  const voteText = votesToday === 1 ? '1 vote' : `${votesToday} votes`;
+  dailyVoteCounter.textContent = `You have cast ${voteText} today.`;
+}
+
+function countVotesForToday(movies = [], voter) {
+  const normalisedVoter = voter.trim().toLowerCase();
+  if (!normalisedVoter) return 0;
+
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = today.getMonth();
+  const date = today.getDate();
+
+  return movies.reduce((total, movie) => {
+    if (!movie || !Array.isArray(movie.voters)) return total;
+
+    const votes = movie.voters.filter((record) => {
+      if (!record || typeof record.voter !== 'string') return false;
+      if (record.voter.trim().toLowerCase() !== normalisedVoter) return false;
+      if (!record.voted_at) return false;
+
+      const votedAt = new Date(record.voted_at);
+      if (Number.isNaN(votedAt.getTime())) return false;
+
+      return (
+        votedAt.getFullYear() === year &&
+        votedAt.getMonth() === month &&
+        votedAt.getDate() === date
+      );
+    }).length;
+
+    return total + votes;
+  }, 0);
+}
+
 async function voteForMovie(movieId, button, votesLabel) {
   if (!movieId) return;
 
@@ -324,6 +377,11 @@ saveDisplayNameButton.addEventListener('click', () => {
   }
   setDisplayName(name);
   setFeedback('Name saved!');
+  updateDailyVoteCount(latestMovies);
+});
+
+displayNameInput.addEventListener('input', () => {
+  updateDailyVoteCount(latestMovies);
 });
 
 searchForm.addEventListener('submit', (event) => {
@@ -349,3 +407,5 @@ if (displayNameInput.value) {
 } else {
   setFeedback('Save your name so friends know who added what.');
 }
+
+updateDailyVoteCount(latestMovies);
