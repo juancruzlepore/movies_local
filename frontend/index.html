@@ -8,17 +8,37 @@
 </head>
 <body>
   <header class="app-header">
-    <h1>Movies Local</h1>
-    <p>Add movies and shows with friends on the same network.</p>
+    <div class="header-content">
+      <div class="header-text">
+        <h1>Movies Local</h1>
+        <p>Add movies and shows with friends on the same network.</p>
+      </div>
+      <button id="change-name" class="secondary header-change-button" type="button" hidden>
+        Change name
+      </button>
+    </div>
   </header>
 
-  <main class="app-main">
-    <section class="identity-card">
-      <label for="display-name">Your name</label>
-      <input id="display-name" type="text" placeholder="How should we credit you?" autocomplete="name">
-      <button id="save-display-name" class="primary">Save</button>
-      <p class="identity-hint">We will store your name in this browser only.</p>
-    </section>
+  <section id="landing-screen" class="landing-screen" aria-labelledby="landing-title">
+    <div class="landing-card">
+      <h2 id="landing-title" class="landing-title">Welcome to Movies Local</h2>
+      <p class="landing-description">Tell us your name so friends know who added what.</p>
+      <form id="display-name-form" class="identity-card">
+        <label for="display-name">Your name</label>
+        <input
+          id="display-name"
+          type="text"
+          placeholder="How should we credit you?"
+          autocomplete="name"
+          required
+        >
+        <button class="primary" type="submit">Continue</button>
+        <p class="identity-hint">We will store your name in this browser only.</p>
+      </form>
+    </div>
+  </section>
+
+  <main class="app-main" hidden>
 
     <section class="search-card">
       <form id="search-form">
