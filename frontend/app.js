@@ -1,7 +1,10 @@
 const API_BASE = window.API_BASE_URL || `${window.location.protocol}//${window.location.hostname}:8080`;
 
 const displayNameInput = document.querySelector('#display-name');
-const saveDisplayNameButton = document.querySelector('#save-display-name');
+const displayNameForm = document.querySelector('#display-name-form');
+const landingScreen = document.querySelector('#landing-screen');
+const changeNameButton = document.querySelector('#change-name');
+const appMain = document.querySelector('.app-main');
 const searchForm = document.querySelector('#search-form');
 const searchInput = document.querySelector('#search-query');
 const searchTypeSelect = document.querySelector('#search-type');
@@ -32,6 +35,82 @@ function hydrateDisplayName() {
   if (savedName) {
     displayNameInput.value = savedName;
   }
+}
+
+function showLanding(options = {}) {
+  const { focusInput = true, selectInput = false, prefill = true } = options;
+
+  if (prefill && displayNameInput) {
+    const savedName = getDisplayName();
+    if (savedName && savedName !== displayNameInput.value) {
+      displayNameInput.value = savedName;
+    }
+  }
+
+  if (landingScreen) {
+    landingScreen.hidden = false;
+    landingScreen.setAttribute('aria-hidden', 'false');
+  }
+
+  if (appMain) {
+    appMain.hidden = true;
+  }
+
+  if (changeNameButton) {
+    changeNameButton.hidden = true;
+  }
+
+  if (document.body) {
+    document.body.classList.add('showing-landing');
+  }
+
+  if (displayNameInput && focusInput) {
+    requestAnimationFrame(() => {
+      displayNameInput.focus();
+      if (selectInput) {
+        displayNameInput.select();
+      }
+    });
+  }
+}
+
+function hideLanding() {
+  if (landingScreen) {
+    landingScreen.hidden = true;
+    landingScreen.setAttribute('aria-hidden', 'true');
+  }
+
+  if (appMain) {
+    appMain.hidden = false;
+  }
+
+  if (changeNameButton) {
+    changeNameButton.hidden = false;
+  }
+
+  if (document.body) {
+    document.body.classList.remove('showing-landing');
+  }
+}
+
+function requireDisplayName(message) {
+  const name = displayNameInput.value.trim();
+  if (name) return name;
+
+  if (message) {
+    setFeedback(message);
+  }
+
+  showLanding({ focusInput: true });
+  return null;
+}
+
+function completeNameSetup({ message } = {}) {
+  hideLanding();
+  if (message) {
+    setFeedback(message);
+  }
+  updateDailyVoteCount(latestMovies);
 }
 
 async function fetchMovies(options = {}) {
@@ -201,10 +280,8 @@ function renderSearchResults(results) {
 }
 
 async function addMovie(result) {
-  const addedBy = displayNameInput.value.trim();
+  const addedBy = requireDisplayName('Save your name before adding a movie.');
   if (!addedBy) {
-    searchFeedback.textContent = 'Save your name before adding a movie.';
-    displayNameInput.focus();
     return;
   }
 
@@ -307,10 +384,8 @@ function countVotesForToday(movies = [], voter) {
 async function voteForMovie(movieId, button, votesLabel) {
   if (!movieId) return;
 
-  const voter = displayNameInput.value.trim();
+  const voter = requireDisplayName('Save your name before voting.');
   if (!voter) {
-    setFeedback('Save your name before voting.');
-    displayNameInput.focus();
     return;
   }
 
@@ -369,16 +444,21 @@ async function safeJson(response) {
   }
 }
 
-saveDisplayNameButton.addEventListener('click', () => {
-  const name = displayNameInput.value.trim();
-  if (!name) {
-    setFeedback('Enter a name to save.');
-    return;
-  }
-  setDisplayName(name);
-  setFeedback('Name saved!');
-  updateDailyVoteCount(latestMovies);
-});
+if (displayNameForm) {
+  displayNameForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!displayNameForm.reportValidity()) return;
+
+    const name = displayNameInput.value.trim();
+    if (!name) {
+      displayNameInput.focus();
+      return;
+    }
+
+    setDisplayName(name);
+    completeNameSetup({ message: 'Name saved!' });
+  });
+}
 
 displayNameInput.addEventListener('input', () => {
   updateDailyVoteCount(latestMovies);
@@ -400,12 +480,22 @@ refreshMoviesButton.addEventListener('click', () => {
 });
 
 hydrateDisplayName();
-fetchMovies();
 
-if (displayNameInput.value) {
-  setFeedback('Ready when you are!');
+if (displayNameInput.value.trim()) {
+  completeNameSetup({ message: 'Ready when you are!' });
 } else {
-  setFeedback('Save your name so friends know who added what.');
+  showLanding({ focusInput: false });
+  setFeedback('Enter your name to get started.');
+  if (displayNameInput) {
+    requestAnimationFrame(() => displayNameInput.focus());
+  }
 }
 
+fetchMovies();
 updateDailyVoteCount(latestMovies);
+
+if (changeNameButton) {
+  changeNameButton.addEventListener('click', () => {
+    showLanding({ selectInput: true });
+  });
+}
