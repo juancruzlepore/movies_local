@@ -14,11 +14,18 @@ Movies Local lets two (or more) people on the same network build a shared list o
 | `BIND_ADDRESS` | `0.0.0.0:8080` | Address where the Axum server listens. |
 | `MOVIES_DB_PATH` | `data/movies.json` | Location of the JSON file that stores the shared list. |
 | `OMDB_API_KEY` | _(required)_ | Needed for `/search` to proxy queries to the OMDb API. |
+| `MOCK_MOVIE_DATA` | _(unset)_ | When set to `1`, `true`, or `yes`, `/movies` returns built-in sample entries for UI previews. |
 
 ### Run the server
 ```bash
 cd backend
 cargo run
+```
+
+To serve built-in mock data for UI development, set `MOCK_MOVIE_DATA=1` when starting the backend:
+
+```bash
+MOCK_MOVIE_DATA=1 cargo run
 ```
 The server creates (or reuses) the JSON data file and exposes these HTTP endpoints:
 - `GET /health` – lightweight readiness probe

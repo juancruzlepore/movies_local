@@ -10,8 +10,11 @@ use axum::extract::{Path, Query, State};
 use axum::http::{Method, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use chrono::{Duration as ChronoDuration, Utc};
 use error::AppError;
-use models::{Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem, VoteRequest};
+use models::{
+    Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem, VoteRecord, VoteRequest,
+};
 use storage::Storage;
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -24,6 +27,7 @@ struct AppState {
     storage: Arc<Storage>,
     client: reqwest::Client,
     omdb_api_key: Option<String>,
+    mock_movies: Option<Vec<Movie>>,
 }
 
 #[tokio::main]
@@ -42,6 +46,13 @@ async fn main() -> Result<(), anyhow::Error> {
     let bind_addr = env::var("BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
     let omdb_api_key = env::var("OMDB_API_KEY").ok();
 
+    let use_mock_data = matches!(
+        env::var("MOCK_MOVIE_DATA")
+            .or_else(|_| env::var("USE_MOCK_DATA"))
+            .as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+    );
+
     let storage = Storage::initialise(data_path.into()).await?;
     let client = reqwest::Client::builder()
         .use_rustls_tls()
@@ -53,6 +64,11 @@ async fn main() -> Result<(), anyhow::Error> {
         storage: Arc::new(storage),
         client,
         omdb_api_key,
+        mock_movies: if use_mock_data {
+            Some(build_mock_movies())
+        } else {
+            None
+        },
     };
 
     let cors = CorsLayer::new()
@@ -110,6 +126,10 @@ async fn health() -> Json<serde_json::Value> {
 }
 
 async fn list_movies(State(state): State<AppState>) -> Result<Json<Vec<Movie>>, AppError> {
+    if let Some(mock_movies) = &state.mock_movies {
+        return Ok(Json(mock_movies.clone()));
+    }
+
     let mut movies = state.storage.list();
     movies.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     Ok(Json(movies))
@@ -185,6 +205,97 @@ fn validate_vote(payload: &VoteRequest) -> Result<(), AppError> {
         return Err(AppError::BadRequest("voter cannot be empty".into()));
     }
     Ok(())
+}
+
+fn build_mock_movies() -> Vec<Movie> {
+    let now = Utc::now();
+    vec![
+        Movie {
+            id: Uuid::parse_str("f5a5c2a3-5b74-4ef1-8f9e-2e8de3e83c85").expect("valid uuid"),
+            title: "Everything Everywhere All at Once".to_string(),
+            imdb_id: "tt6710474".to_string(),
+            added_by: "Evelyn".to_string(),
+            poster_url: Some("https://example.com/posters/everything-everywhere.jpg".to_string()),
+            year: Some("2022".to_string()),
+            media_type: Some("movie".to_string()),
+            notes: Some("Multiverse adventure for the laundromat crew.".to_string()),
+            plot: Some("An overwhelmed laundromat owner discovers the power to fight across universes.".to_string()),
+            votes: 5,
+            voters: vec![
+                VoteRecord {
+                    voter: "Joy".to_string(),
+                    voted_at: Some(now - ChronoDuration::hours(2)),
+                },
+                VoteRecord {
+                    voter: "Waymond".to_string(),
+                    voted_at: Some(now - ChronoDuration::hours(3)),
+                },
+                VoteRecord {
+                    voter: "Becky".to_string(),
+                    voted_at: Some(now - ChronoDuration::hours(5)),
+                },
+                VoteRecord {
+                    voter: "Gong Gong".to_string(),
+                    voted_at: Some(now - ChronoDuration::hours(8)),
+                },
+                VoteRecord {
+                    voter: "Deirdre".to_string(),
+                    voted_at: Some(now - ChronoDuration::hours(12)),
+                },
+            ],
+            created_at: now - ChronoDuration::days(1),
+        },
+        Movie {
+            id: Uuid::parse_str("f9e9a2c6-2a19-4c5d-96b2-4b967ac9a5c0").expect("valid uuid"),
+            title: "Spider-Man: Across the Spider-Verse".to_string(),
+            imdb_id: "tt9362722".to_string(),
+            added_by: "Miles".to_string(),
+            poster_url: Some("https://example.com/posters/spiderverse-2.jpg".to_string()),
+            year: Some("2023".to_string()),
+            media_type: Some("movie".to_string()),
+            notes: Some("Animated sequel night with the Spot as the villain.".to_string()),
+            plot: Some("Miles Morales teams up with Gwen Stacy and the Spider-Society on a multiversal mission.".to_string()),
+            votes: 3,
+            voters: vec![
+                VoteRecord {
+                    voter: "Gwen".to_string(),
+                    voted_at: Some(now - ChronoDuration::hours(4)),
+                },
+                VoteRecord {
+                    voter: "Peter B.".to_string(),
+                    voted_at: Some(now - ChronoDuration::hours(6)),
+                },
+                VoteRecord {
+                    voter: "Hobie".to_string(),
+                    voted_at: Some(now - ChronoDuration::hours(7)),
+                },
+            ],
+            created_at: now - ChronoDuration::days(3),
+        },
+        Movie {
+            id: Uuid::parse_str("bce29ad0-1a73-49a0-9a3f-0fdd42a05ad2").expect("valid uuid"),
+            title: "The Great British Bake Off: Holiday Special".to_string(),
+            imdb_id: "tt7605052".to_string(),
+            added_by: "Paul".to_string(),
+            poster_url: Some("https://example.com/posters/gbbo-holiday-special.jpg".to_string()),
+            year: Some("2021".to_string()),
+            media_type: Some("series".to_string()),
+            notes: Some("Cozy seasonal episode for background comfort.".to_string()),
+            plot: Some("Fan favourites return to the tent for festive bakes.".to_string()),
+            votes: 2,
+            voters: vec![
+                VoteRecord {
+                    voter: "Prue".to_string(),
+                    voted_at: Some(now - ChronoDuration::hours(10)),
+                },
+                VoteRecord {
+                    voter: "Noel".to_string(),
+                    voted_at: Some(now - ChronoDuration::hours(16)),
+                },
+            ],
+            created_at: now - ChronoDuration::days(7),
+        },
+    ]
 }
 
 impl AppState {

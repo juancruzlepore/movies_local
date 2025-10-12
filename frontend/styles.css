@@ -69,6 +69,12 @@ section {
   gap: 1.25rem;
 }
 
+.vote-counter {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--fg-muted);
+}
+
 .list-subsection {
   display: flex;
   flex-direction: column;
