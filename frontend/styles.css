@@ -319,13 +319,24 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  flex-wrap: wrap;
 }
 
 .vote-button {
   flex: 0 0 auto;
 }
 
-.movie-votes {
+.watched-button {
+  flex: 0 0 auto;
+}
+
+.movie-watched {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+
+.movie-points {
   color: var(--fg-muted);
   font-size: 0.85rem;
 }

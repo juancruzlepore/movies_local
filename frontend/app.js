@@ -1,4 +1,8 @@
-const API_BASE = window.API_BASE_URL || `${window.location.protocol}//${window.location.hostname}:8080`;
+const API_STORAGE_KEY = 'movies-local-api-base';
+const API_BASE = resolveApiBase();
+const DAILY_VOTE_LIMIT = 2;
+const BIG_VOTE_POINTS = 2;
+const SMALL_VOTE_POINTS = 1;
 
 const displayNameInput = document.querySelector('#display-name');
 const displayNameForm = document.querySelector('#display-name-form');
@@ -10,7 +14,7 @@ const searchInput = document.querySelector('#search-query');
 const searchTypeSelect = document.querySelector('#search-type');
 const searchResultsList = document.querySelector('#search-results');
 const searchFeedback = document.querySelector('#search-feedback');
-const moviesListByVotes = document.querySelector('#movies-list-by-votes');
+const moviesListByPoints = document.querySelector('#movies-list-by-points');
 const moviesListByRecent = document.querySelector('#movies-list-by-recent');
 const refreshMoviesButton = document.querySelector('#refresh-movies');
 const dailyVoteCounter = document.querySelector('#daily-vote-count');
@@ -21,6 +25,74 @@ const movieTemplate = document.querySelector('#movie-item-template');
 const STORAGE_KEY = 'movies-local-display-name';
 
 let latestMovies = [];
+
+function resolveApiBase() {
+  const candidate =
+    window.API_BASE_URL ||
+    getStoredApiBase() ||
+    getUrlOverride() ||
+    inferFromLocation() ||
+    'http://localhost:8080';
+
+  console.info('[movies-local] API base:', candidate);
+  return candidate.replace(/\/+$/, '');
+}
+
+function getStoredApiBase() {
+  try {
+    return localStorage.getItem(API_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setStoredApiBase(value) {
+  try {
+    if (value) {
+      localStorage.setItem(API_STORAGE_KEY, value);
+    } else {
+      localStorage.removeItem(API_STORAGE_KEY);
+    }
+  } catch {
+    // ignore storage errors (private browsing, etc)
+  }
+}
+
+function getUrlOverride() {
+  const searchParams = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(window.location.hash.slice(1));
+  const override = searchParams.get('api') || hashParams.get('api');
+  if (!override) return null;
+  setStoredApiBase(override);
+  return override;
+}
+
+function inferFromLocation() {
+  const { protocol, hostname } = window.location;
+
+  if (!hostname || hostname === '0.0.0.0') {
+    return null;
+  }
+
+  const url = new URL('http://placeholder');
+  url.protocol = protocol === 'https:' ? 'https:' : 'http:';
+  url.hostname = hostname;
+  url.port = '8080';
+  return url.origin;
+}
+
+window.moviesLocal = window.moviesLocal || {};
+window.moviesLocal.setApiBase = function setApiBase(nextBase) {
+  if (!nextBase) return;
+  try {
+    const url = new URL(nextBase);
+    setStoredApiBase(url.origin);
+  } catch {
+    console.warn('[movies-local] Invalid API base provided:', nextBase);
+    return;
+  }
+  window.location.reload();
+};
 
 function getDisplayName() {
   return localStorage.getItem(STORAGE_KEY) || '';
@@ -142,9 +214,9 @@ async function fetchMovies(options = {}) {
 }
 
 function renderMovies(movies) {
-  const moviesByVotes = [...movies].sort((a, b) => {
-    const voteDiff = (b.votes ?? 0) - (a.votes ?? 0);
-    if (voteDiff !== 0) return voteDiff;
+  const moviesByPoints = [...movies].sort((a, b) => {
+    const pointsDiff = (getPoints(b) - getPoints(a));
+    if (pointsDiff !== 0) return pointsDiff;
     const titleA = a.title ?? '';
     const titleB = b.title ?? '';
     return titleA.localeCompare(titleB);
@@ -161,7 +233,7 @@ function renderMovies(movies) {
     return timeB - timeA;
   });
 
-  renderMovieList(moviesListByVotes, moviesByVotes);
+  renderMovieList(moviesListByPoints, moviesByPoints);
   renderMovieList(moviesListByRecent, moviesByRecent);
 }
 
@@ -196,6 +268,8 @@ function buildMovieElement(movie) {
   const metaParts = [];
   if (movie.year) metaParts.push(movie.year);
   if (movie.media_type) metaParts.push(capitalise(movie.media_type));
+  const runtime = formatRuntime(movie.runtime_minutes);
+  if (runtime) metaParts.push(runtime);
   element.querySelector('.movie-meta').textContent = metaParts.join(' • ');
 
   const posterContainer = element.querySelector('.movie-poster');
@@ -218,12 +292,37 @@ function buildMovieElement(movie) {
   const timestamp = movie.created_at ? formatTimestamp(movie.created_at) : '';
   element.querySelector('.movie-added').textContent = `${added}${timestamp ? ` • ${timestamp}` : ''}`;
 
+  const watchedLabel = element.querySelector('.movie-watched');
+  const lastWatched = formatLastWatched(movie.last_watched_at);
+  if (lastWatched) {
+    watchedLabel.textContent = lastWatched;
+    watchedLabel.hidden = false;
+  } else {
+    watchedLabel.textContent = '';
+    watchedLabel.hidden = true;
+  }
+
   const voteButton = element.querySelector('.vote-button');
-  const votesLabel = element.querySelector('.movie-votes');
-  votesLabel.textContent = formatVotes(movie.votes ?? 0);
+  const pointsLabel = element.querySelector('.movie-points');
+  pointsLabel.textContent = formatPoints(getPoints(movie));
+
+  const voter = displayNameInput.value.trim();
+  const votesToday = voter ? countVotesForToday(latestMovies, voter) : 0;
+  const { label, disabled, tooltip } = describeNextVote(votesToday);
+  voteButton.textContent = label;
+  voteButton.disabled = disabled;
+  voteButton.title = tooltip;
+
   voteButton.addEventListener('click', () =>
-    voteForMovie(movie.id, voteButton, votesLabel),
+    voteForMovie(movie.id, voteButton, pointsLabel),
   );
+
+  const watchedButton = element.querySelector('.watched-button');
+  if (watchedButton) {
+    watchedButton.addEventListener('click', () =>
+      markMovieWatched(movie.id, watchedButton),
+    );
+  }
 
   return element;
 }
@@ -255,6 +354,12 @@ async function searchMovies(query, mediaType) {
 function renderSearchResults(results) {
   searchResultsList.innerHTML = '';
 
+  const existingIds = new Set(
+    (latestMovies || [])
+      .map((movie) => (movie?.imdb_id || '').toLowerCase())
+      .filter(Boolean),
+  );
+
   const fragment = document.createDocumentFragment();
   for (const result of results) {
     const element = resultTemplate.content.cloneNode(true);
@@ -271,7 +376,19 @@ function renderSearchResults(results) {
     }
 
     const addButton = element.querySelector('.add-button');
-    addButton.addEventListener('click', () => addMovie(result));
+    const imdbId = (result?.imdb_id || '').toLowerCase();
+    const alreadyAdded = imdbId && existingIds.has(imdbId);
+
+    if (alreadyAdded) {
+      addButton.textContent = 'Added';
+      addButton.disabled = true;
+      addButton.setAttribute('aria-disabled', 'true');
+    } else {
+      addButton.textContent = 'Add';
+      addButton.disabled = false;
+      addButton.removeAttribute('aria-disabled');
+      addButton.addEventListener('click', () => addMovie(result, addButton));
+    }
 
     fragment.appendChild(element);
   }
@@ -279,10 +396,21 @@ function renderSearchResults(results) {
   searchResultsList.appendChild(fragment);
 }
 
-async function addMovie(result) {
+async function addMovie(result, button) {
   const addedBy = requireDisplayName('Save your name before adding a movie.');
   if (!addedBy) {
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Add';
+      button.removeAttribute('aria-disabled');
+    }
     return;
+  }
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Adding…';
+    button.setAttribute('aria-disabled', 'true');
   }
 
   const payload = {
@@ -309,10 +437,20 @@ async function addMovie(result) {
     }
 
     setFeedback('Added to the list!');
+    if (button) {
+      button.textContent = 'Added';
+      button.disabled = true;
+      button.setAttribute('aria-disabled', 'true');
+    }
     await fetchMovies({ showLoading: false });
   } catch (error) {
     console.error(error);
     setFeedback(error.message || 'Unable to add the movie.');
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Add';
+      button.removeAttribute('aria-disabled');
+    }
   }
 }
 
@@ -332,8 +470,39 @@ function capitalise(value = '') {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function formatVotes(votes = 0) {
-  return votes === 1 ? '1 vote' : `${votes} votes`;
+function getPoints(movie = {}) {
+  if (!movie || typeof movie !== 'object') return 0;
+  if (typeof movie.points === 'number') return movie.points;
+  if (typeof movie.votes === 'number') return movie.votes;
+  return 0;
+}
+
+function getVoteHistory(movie = {}) {
+  if (!movie || typeof movie !== 'object') return [];
+  if (Array.isArray(movie.vote_history)) return movie.vote_history;
+  if (Array.isArray(movie.voters)) return movie.voters;
+  return [];
+}
+
+function formatPoints(points = 0) {
+  return points === 1 ? '1 point' : `${points} points`;
+}
+
+function formatRuntime(value) {
+  if (value == null) return '';
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes) || minutes <= 0) return '';
+  const hours = Math.floor(minutes / 60);
+  const remaining = minutes % 60;
+  if (hours > 0 && remaining > 0) return `${hours}h ${remaining}m`;
+  if (hours > 0) return `${hours}h`;
+  return `${minutes}m`;
+}
+
+function formatLastWatched(value) {
+  if (!value) return '';
+  const formatted = formatTimestamp(value);
+  return formatted ? `Last watched: ${formatted}` : '';
 }
 
 function updateDailyVoteCount(movies = []) {
@@ -346,8 +515,12 @@ function updateDailyVoteCount(movies = []) {
   }
 
   const votesToday = countVotesForToday(movies, voter);
-  const voteText = votesToday === 1 ? '1 vote' : `${votesToday} votes`;
-  dailyVoteCounter.textContent = `You have cast ${voteText} today.`;
+  const remaining = Math.max(DAILY_VOTE_LIMIT - votesToday, 0);
+  const baseMessage = `You have used ${votesToday} of ${DAILY_VOTE_LIMIT} votes today.`;
+  dailyVoteCounter.textContent =
+    votesToday >= DAILY_VOTE_LIMIT && remaining === 0
+      ? `${baseMessage} Limit reached.`
+      : baseMessage;
 }
 
 function countVotesForToday(movies = [], voter) {
@@ -360,9 +533,10 @@ function countVotesForToday(movies = [], voter) {
   const date = today.getDate();
 
   return movies.reduce((total, movie) => {
-    if (!movie || !Array.isArray(movie.voters)) return total;
+    const history = getVoteHistory(movie);
+    if (!Array.isArray(history) || !history.length) return total;
 
-    const votes = movie.voters.filter((record) => {
+    const votes = history.filter((record) => {
       if (!record || typeof record.voter !== 'string') return false;
       if (record.voter.trim().toLowerCase() !== normalisedVoter) return false;
       if (!record.voted_at) return false;
@@ -381,11 +555,24 @@ function countVotesForToday(movies = [], voter) {
   }, 0);
 }
 
-async function voteForMovie(movieId, button, votesLabel) {
+async function voteForMovie(movieId, button, pointsLabel) {
   if (!movieId) return;
 
   const voter = requireDisplayName('Save your name before voting.');
   if (!voter) {
+    button.disabled = false;
+    button.title = '';
+    return;
+  }
+
+  const votesToday = countVotesForToday(latestMovies, voter);
+  if (votesToday >= DAILY_VOTE_LIMIT) {
+    setFeedback(`You have used your ${DAILY_VOTE_LIMIT} votes for today.`);
+    updateDailyVoteCount(latestMovies);
+    const { label, tooltip } = describeNextVote(votesToday);
+    button.disabled = true;
+    button.textContent = label;
+    button.title = tooltip;
     return;
   }
 
@@ -407,16 +594,74 @@ async function voteForMovie(movieId, button, votesLabel) {
     }
 
     const updated = await response.json();
-    const votes = updated.votes ?? 0;
-    votesLabel.textContent = formatVotes(votes);
+    const points = getPoints(updated);
+    pointsLabel.textContent = formatPoints(points);
     setFeedback('Thanks for voting!');
     await fetchMovies({ showLoading: false });
   } catch (error) {
     console.error(error);
     setFeedback(error.message || 'Unable to register your vote.');
   } finally {
-    button.disabled = false;
+    const updatedVotesToday = countVotesForToday(latestMovies, voter);
+    const { label, disabled, tooltip } = describeNextVote(updatedVotesToday);
+    button.disabled = disabled;
+    button.textContent = label;
+    button.title = tooltip;
   }
+}
+
+async function markMovieWatched(movieId, button) {
+  if (!movieId || !button) return;
+
+  button.disabled = true;
+  button.textContent = 'Updating…';
+  button.title = '';
+  button.setAttribute('aria-disabled', 'true');
+  setFeedback('Resetting points…');
+
+  try {
+    const response = await fetch(`${API_BASE}/movies/${movieId}/watch`, {
+      method: 'POST',
+    });
+
+    if (!response.ok) {
+      const problem = await safeJson(response);
+      throw new Error(problem?.message || `Watch failed with ${response.status}`);
+    }
+
+    setFeedback('Marked as watched!');
+    await fetchMovies({ showLoading: false });
+  } catch (error) {
+    console.error(error);
+    setFeedback(error.message || 'Unable to mark as watched.');
+    button.disabled = false;
+    button.textContent = 'Watched';
+    button.removeAttribute('aria-disabled');
+  }
+}
+
+function describeNextVote(votesToday) {
+  if (votesToday <= 0) {
+    return {
+      label: `Big vote (+${BIG_VOTE_POINTS} points)`,
+      disabled: false,
+      tooltip: '',
+    };
+  }
+
+  if (votesToday === 1) {
+    return {
+      label: `Small vote (+${SMALL_VOTE_POINTS} point)`,
+      disabled: false,
+      tooltip: '',
+    };
+  }
+
+  return {
+    label: 'No votes left today',
+    disabled: true,
+    tooltip: `Daily limit reached (${DAILY_VOTE_LIMIT} votes)`,
+  };
 }
 
 function setFeedback(text) {

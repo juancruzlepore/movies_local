@@ -65,8 +65,8 @@
       <p id="daily-vote-count" class="vote-counter" role="status" aria-live="polite"></p>
       <div class="shared-lists">
         <section class="list-subsection">
-          <h3 class="list-subtitle">Top picks</h3>
-          <ul id="movies-list-by-votes" class="card-list"></ul>
+          <h3 class="list-subtitle">Top picks by points</h3>
+          <ul id="movies-list-by-points" class="card-list"></ul>
         </section>
         <section class="list-subsection">
           <h3 class="list-subtitle">Newest additions</h3>
@@ -98,9 +98,11 @@
           <p class="movie-meta"></p>
         </div>
         <p class="movie-added"></p>
+        <p class="movie-watched" aria-live="polite"></p>
         <div class="movie-actions">
           <button class="secondary vote-button" type="button">Vote</button>
-          <span class="movie-votes" aria-live="polite"></span>
+          <span class="movie-points" aria-live="polite"></span>
+          <button class="secondary watched-button" type="button">Watched</button>
         </div>
       </div>
     </li>

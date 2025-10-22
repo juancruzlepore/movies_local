@@ -19,6 +19,8 @@ pub enum AppError {
     Configuration(String),
     #[error("{0}")]
     NotFound(String),
+    #[error("{0}")]
+    TooManyRequests(String),
     #[error(transparent)]
     Storage(#[from] StorageError),
     #[error("{0}")]
@@ -31,6 +33,7 @@ impl IntoResponse for AppError {
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::Configuration(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
+            AppError::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             AppError::Storage(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::Downstream(_) => StatusCode::BAD_GATEWAY,
         };

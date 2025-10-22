@@ -20,9 +20,17 @@ pub struct Movie {
     #[serde(default)]
     pub plot: Option<String>,
     #[serde(default)]
-    pub votes: u32,
-    #[serde(default, deserialize_with = "deserialize_votes")]
-    pub voters: Vec<VoteRecord>,
+    pub runtime_minutes: Option<u32>,
+    #[serde(default)]
+    pub last_watched_at: Option<DateTime<Utc>>,
+    #[serde(default, alias = "votes")]
+    pub points: u32,
+    #[serde(
+        default,
+        alias = "voters",
+        deserialize_with = "deserialize_vote_history"
+    )]
+    pub vote_history: Vec<Vote>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -41,6 +49,8 @@ pub struct NewMovie {
     pub notes: Option<String>,
     #[serde(default)]
     pub plot: Option<String>,
+    #[serde(default)]
+    pub runtime_minutes: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,10 +59,12 @@ pub struct VoteRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VoteRecord {
+pub struct Vote {
     pub voter: String,
     #[serde(default)]
     pub voted_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub points_awarded: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,14 +128,14 @@ impl SearchResultItem {
     }
 }
 
-fn deserialize_votes<'de, D>(deserializer: D) -> Result<Vec<VoteRecord>, D::Error>
+fn deserialize_vote_history<'de, D>(deserializer: D) -> Result<Vec<Vote>, D::Error>
 where
     D: Deserializer<'de>,
 {
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum VoteItem {
-        Record(VoteRecord),
+        Record(Vote),
         Name(String),
     }
 
@@ -132,9 +144,10 @@ where
         .into_iter()
         .map(|item| match item {
             VoteItem::Record(record) => record,
-            VoteItem::Name(name) => VoteRecord {
+            VoteItem::Name(name) => Vote {
                 voter: name,
                 voted_at: None,
+                points_awarded: None,
             },
         })
         .collect())

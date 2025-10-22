@@ -12,10 +12,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{Duration as ChronoDuration, Utc};
 use error::AppError;
-use models::{
-    Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem, VoteRecord, VoteRequest,
-};
-use storage::Storage;
+use models::{Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem, Vote, VoteRequest};
+use serde::Deserialize;
+use storage::{Storage, VoteOutcome, DAILY_VOTE_LIMIT, SMALL_VOTE_POINTS};
 use tokio::net::TcpListener;
 use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
@@ -55,6 +54,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let storage = Storage::initialise(data_path.into()).await?;
     let client = reqwest::Client::builder()
+        .no_proxy()
         .use_rustls_tls()
         .timeout(Duration::from_secs(10))
         .user_agent("movies-local-backend/0.1")
@@ -80,6 +80,7 @@ async fn main() -> Result<(), anyhow::Error> {
         .route("/health", get(health))
         .route("/movies", get(list_movies).post(add_movie))
         .route("/movies/:id/votes", post(vote_movie))
+        .route("/movies/:id/watch", post(mark_watched))
         .route("/search", get(search_movies))
         .with_state(state)
         .layer(cors);
@@ -137,9 +138,20 @@ async fn list_movies(State(state): State<AppState>) -> Result<Json<Vec<Movie>>, 
 
 async fn add_movie(
     State(state): State<AppState>,
-    Json(payload): Json<NewMovie>,
+    Json(mut payload): Json<NewMovie>,
 ) -> Result<(StatusCode, Json<Movie>), AppError> {
     validate_new_movie(&payload)?;
+
+    match state.fetch_movie_runtime(&payload.imdb_id).await {
+        Ok(runtime) => payload.runtime_minutes = runtime,
+        Err(err) => {
+            warn!(
+                "failed to fetch runtime imdb_id='{}': {}",
+                payload.imdb_id, err
+            );
+        }
+    }
+
     let movie = state.storage.add(payload).await?;
     Ok((StatusCode::CREATED, Json(movie)))
 }
@@ -152,7 +164,27 @@ async fn vote_movie(
     validate_vote(&payload)?;
     let voter = payload.voter.trim().to_string();
 
-    match state.storage.vote(id, voter).await? {
+    match state.storage.vote(id, voter.clone()).await? {
+        VoteOutcome::PointsAwarded(movie) => Ok(Json(movie)),
+        VoteOutcome::LimitReached => {
+            warn!(
+                "vote rejected voter='{}' movie_id='{}' reason='daily limit'",
+                voter, id
+            );
+            Err(AppError::TooManyRequests(format!(
+                "Daily vote limit reached ({} per day)",
+                DAILY_VOTE_LIMIT
+            )))
+        }
+        VoteOutcome::NotFound => Err(AppError::NotFound("movie not found".into())),
+    }
+}
+
+async fn mark_watched(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Movie>, AppError> {
+    match state.storage.mark_watched(id).await? {
         Some(movie) => Ok(Json(movie)),
         None => Err(AppError::NotFound("movie not found".into())),
     }
@@ -209,6 +241,79 @@ fn validate_vote(payload: &VoteRequest) -> Result<(), AppError> {
 
 fn build_mock_movies() -> Vec<Movie> {
     let now = Utc::now();
+
+    let eeaao_votes = vec![
+        Vote {
+            voter: "Joy".to_string(),
+            voted_at: Some(now - ChronoDuration::hours(2)),
+            points_awarded: Some(SMALL_VOTE_POINTS),
+        },
+        Vote {
+            voter: "Waymond".to_string(),
+            voted_at: Some(now - ChronoDuration::hours(3)),
+            points_awarded: Some(SMALL_VOTE_POINTS),
+        },
+        Vote {
+            voter: "Becky".to_string(),
+            voted_at: Some(now - ChronoDuration::hours(5)),
+            points_awarded: Some(SMALL_VOTE_POINTS),
+        },
+        Vote {
+            voter: "Gong Gong".to_string(),
+            voted_at: Some(now - ChronoDuration::hours(8)),
+            points_awarded: Some(SMALL_VOTE_POINTS),
+        },
+        Vote {
+            voter: "Deirdre".to_string(),
+            voted_at: Some(now - ChronoDuration::hours(12)),
+            points_awarded: Some(SMALL_VOTE_POINTS),
+        },
+    ];
+
+    let spiderverse_votes = vec![
+        Vote {
+            voter: "Gwen".to_string(),
+            voted_at: Some(now - ChronoDuration::hours(4)),
+            points_awarded: Some(SMALL_VOTE_POINTS),
+        },
+        Vote {
+            voter: "Peter B.".to_string(),
+            voted_at: Some(now - ChronoDuration::hours(6)),
+            points_awarded: Some(SMALL_VOTE_POINTS),
+        },
+        Vote {
+            voter: "Hobie".to_string(),
+            voted_at: Some(now - ChronoDuration::hours(7)),
+            points_awarded: Some(SMALL_VOTE_POINTS),
+        },
+    ];
+
+    let bakeoff_votes = vec![
+        Vote {
+            voter: "Prue".to_string(),
+            voted_at: Some(now - ChronoDuration::hours(10)),
+            points_awarded: Some(SMALL_VOTE_POINTS),
+        },
+        Vote {
+            voter: "Noel".to_string(),
+            voted_at: Some(now - ChronoDuration::hours(16)),
+            points_awarded: Some(SMALL_VOTE_POINTS),
+        },
+    ];
+
+    let eeaao_points: u32 = eeaao_votes
+        .iter()
+        .map(|vote| vote.points_awarded.unwrap_or(SMALL_VOTE_POINTS))
+        .sum();
+    let spiderverse_points: u32 = spiderverse_votes
+        .iter()
+        .map(|vote| vote.points_awarded.unwrap_or(SMALL_VOTE_POINTS))
+        .sum();
+    let bakeoff_points: u32 = bakeoff_votes
+        .iter()
+        .map(|vote| vote.points_awarded.unwrap_or(SMALL_VOTE_POINTS))
+        .sum();
+
     vec![
         Movie {
             id: Uuid::parse_str("f5a5c2a3-5b74-4ef1-8f9e-2e8de3e83c85").expect("valid uuid"),
@@ -220,29 +325,10 @@ fn build_mock_movies() -> Vec<Movie> {
             media_type: Some("movie".to_string()),
             notes: Some("Multiverse adventure for the laundromat crew.".to_string()),
             plot: Some("An overwhelmed laundromat owner discovers the power to fight across universes.".to_string()),
-            votes: 5,
-            voters: vec![
-                VoteRecord {
-                    voter: "Joy".to_string(),
-                    voted_at: Some(now - ChronoDuration::hours(2)),
-                },
-                VoteRecord {
-                    voter: "Waymond".to_string(),
-                    voted_at: Some(now - ChronoDuration::hours(3)),
-                },
-                VoteRecord {
-                    voter: "Becky".to_string(),
-                    voted_at: Some(now - ChronoDuration::hours(5)),
-                },
-                VoteRecord {
-                    voter: "Gong Gong".to_string(),
-                    voted_at: Some(now - ChronoDuration::hours(8)),
-                },
-                VoteRecord {
-                    voter: "Deirdre".to_string(),
-                    voted_at: Some(now - ChronoDuration::hours(12)),
-                },
-            ],
+            runtime_minutes: Some(139),
+            last_watched_at: Some(now - ChronoDuration::hours(6)),
+            points: eeaao_points,
+            vote_history: eeaao_votes,
             created_at: now - ChronoDuration::days(1),
         },
         Movie {
@@ -255,21 +341,10 @@ fn build_mock_movies() -> Vec<Movie> {
             media_type: Some("movie".to_string()),
             notes: Some("Animated sequel night with the Spot as the villain.".to_string()),
             plot: Some("Miles Morales teams up with Gwen Stacy and the Spider-Society on a multiversal mission.".to_string()),
-            votes: 3,
-            voters: vec![
-                VoteRecord {
-                    voter: "Gwen".to_string(),
-                    voted_at: Some(now - ChronoDuration::hours(4)),
-                },
-                VoteRecord {
-                    voter: "Peter B.".to_string(),
-                    voted_at: Some(now - ChronoDuration::hours(6)),
-                },
-                VoteRecord {
-                    voter: "Hobie".to_string(),
-                    voted_at: Some(now - ChronoDuration::hours(7)),
-                },
-            ],
+            runtime_minutes: Some(140),
+            last_watched_at: None,
+            points: spiderverse_points,
+            vote_history: spiderverse_votes,
             created_at: now - ChronoDuration::days(3),
         },
         Movie {
@@ -282,17 +357,10 @@ fn build_mock_movies() -> Vec<Movie> {
             media_type: Some("series".to_string()),
             notes: Some("Cozy seasonal episode for background comfort.".to_string()),
             plot: Some("Fan favourites return to the tent for festive bakes.".to_string()),
-            votes: 2,
-            voters: vec![
-                VoteRecord {
-                    voter: "Prue".to_string(),
-                    voted_at: Some(now - ChronoDuration::hours(10)),
-                },
-                VoteRecord {
-                    voter: "Noel".to_string(),
-                    voted_at: Some(now - ChronoDuration::hours(16)),
-                },
-            ],
+            runtime_minutes: Some(60),
+            last_watched_at: Some(now - ChronoDuration::days(2)),
+            points: bakeoff_points,
+            vote_history: bakeoff_votes,
             created_at: now - ChronoDuration::days(7),
         },
     ]
@@ -354,4 +422,65 @@ impl AppState {
             })
         }
     }
+
+    async fn fetch_movie_runtime(&self, imdb_id: &str) -> Result<Option<u32>, AppError> {
+        let key = match self.omdb_api_key.as_ref() {
+            Some(key) => key,
+            None => return Ok(None),
+        };
+
+        #[derive(Debug, Deserialize)]
+        struct OmdbDetailResponse {
+            #[serde(rename = "Response")]
+            response: String,
+            #[serde(rename = "Error")]
+            error: Option<String>,
+            #[serde(rename = "Runtime")]
+            runtime: Option<String>,
+        }
+
+        let response = self
+            .client
+            .get("https://www.omdbapi.com/")
+            .query(&[("apikey", key.as_str()), ("i", imdb_id)])
+            .send()
+            .await
+            .map_err(|err| AppError::Downstream(format!("omdb detail failed: {err}")))?;
+
+        if !response.status().is_success() {
+            return Err(AppError::Downstream(format!(
+                "omdb detail returned unexpected status: {}",
+                response.status()
+            )));
+        }
+
+        let payload: OmdbDetailResponse = response.json().await.map_err(|err| {
+            AppError::Downstream(format!("failed to decode omdb detail response: {err}"))
+        })?;
+
+        if !payload.response.eq_ignore_ascii_case("true") {
+            if let Some(error) = payload.error {
+                warn!(
+                    "omdb detail responded with error imdb_id='{}': {}",
+                    imdb_id, error
+                );
+            }
+            return Ok(None);
+        }
+
+        Ok(payload
+            .runtime
+            .and_then(|value| parse_runtime_minutes(&value)))
+    }
+}
+
+fn parse_runtime_minutes(value: &str) -> Option<u32> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("N/A") {
+        return None;
+    }
+
+    let digits = trimmed.split_whitespace().next().unwrap_or(trimmed);
+
+    digits.parse().ok()
 }
