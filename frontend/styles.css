@@ -486,6 +486,12 @@ button:disabled {
   box-shadow: 0 0 4px rgba(148, 163, 184, 0.35);
 }
 
+.point-dot--half {
+  background: linear-gradient(90deg, rgba(226, 232, 240, 0.9) 50%, transparent 50%);
+  border-color: rgba(226, 232, 240, 0.95);
+  box-shadow: 0 0 4px rgba(148, 163, 184, 0.35);
+}
+
 .section-header {
   display: flex;
   justify-content: space-between;

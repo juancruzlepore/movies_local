@@ -10,8 +10,9 @@ use uuid::Uuid;
 
 pub const DAILY_VOTE_LIMIT: usize = 2;
 pub const ANNE_DAILY_VOTE_LIMIT: usize = 3;
-pub const BIG_VOTE_POINTS: u32 = 2;
-pub const SMALL_VOTE_POINTS: u32 = 1;
+pub const BIG_VOTE_POINTS: f32 = 1.5;
+pub const SMALL_VOTE_POINTS: f32 = 1.0;
+pub const ANNE_BONUS_VOTE_POINTS: f32 = 0.5;
 
 #[derive(Debug, Clone)]
 pub enum VoteOutcome {
@@ -76,7 +77,7 @@ impl Storage {
             plot: request.plot,
             runtime_minutes: request.runtime_minutes,
             last_watched_at: None,
-            points: 0,
+            points: 0.0,
             vote_history: Vec::new(),
             created_at: Utc::now(),
         };
@@ -163,7 +164,7 @@ fn normalise_movie(mut movie: Movie) -> Movie {
 fn recalculate_points(movie: &mut Movie) {
     let cutoff = movie.last_watched_at;
 
-    let points: u32 = movie
+    let points: f32 = movie
         .vote_history
         .iter()
         .filter(|vote| match (vote.voted_at, cutoff) {
@@ -204,7 +205,7 @@ fn vote_limit_for(normalised_voter: &str) -> usize {
     }
 }
 
-fn points_for_vote(votes_today: usize, normalised_voter: &str) -> u32 {
+fn points_for_vote(votes_today: usize, normalised_voter: &str) -> f32 {
     if votes_today == 0 {
         return BIG_VOTE_POINTS;
     }
@@ -214,7 +215,7 @@ fn points_for_vote(votes_today: usize, normalised_voter: &str) -> u32 {
     }
 
     if is_anne(normalised_voter) && votes_today == 2 {
-        return SMALL_VOTE_POINTS;
+        return ANNE_BONUS_VOTE_POINTS;
     }
 
     SMALL_VOTE_POINTS
@@ -423,7 +424,7 @@ mod tests {
 
         assert_eq!(
             primary_after_third.points,
-            BIG_VOTE_POINTS + SMALL_VOTE_POINTS
+            BIG_VOTE_POINTS + ANNE_BONUS_VOTE_POINTS
         );
         assert_eq!(primary_after_third.vote_history.len(), 2);
         assert_eq!(
@@ -431,7 +432,7 @@ mod tests {
                 .vote_history
                 .last()
                 .and_then(|vote| vote.points_awarded),
-            Some(SMALL_VOTE_POINTS)
+            Some(ANNE_BONUS_VOTE_POINTS)
         );
 
         let fourth = storage
@@ -471,12 +472,12 @@ mod tests {
             .expect("movie exists");
 
         assert!(watched.last_watched_at.is_some());
-        assert_eq!(watched.points, 0);
+        assert_eq!(watched.points, 0.0);
         assert_eq!(watched.vote_history.len(), 1);
 
         let persisted = fs::read(&path).await.expect("read persisted file");
         let parsed: Vec<Movie> = serde_json::from_slice(&persisted).expect("parse data");
-        assert_eq!(parsed[0].points, 0);
+        assert_eq!(parsed[0].points, 0.0);
         assert!(parsed[0].last_watched_at.is_some());
         assert_eq!(parsed[0].vote_history.len(), 1);
 

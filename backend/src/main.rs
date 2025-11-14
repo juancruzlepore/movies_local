@@ -301,15 +301,15 @@ fn build_mock_movies() -> Vec<Movie> {
         },
     ];
 
-    let eeaao_points: u32 = eeaao_votes
+    let eeaao_points: f32 = eeaao_votes
         .iter()
         .map(|vote| vote.points_awarded.unwrap_or(SMALL_VOTE_POINTS))
         .sum();
-    let spiderverse_points: u32 = spiderverse_votes
+    let spiderverse_points: f32 = spiderverse_votes
         .iter()
         .map(|vote| vote.points_awarded.unwrap_or(SMALL_VOTE_POINTS))
         .sum();
-    let bakeoff_points: u32 = bakeoff_votes
+    let bakeoff_points: f32 = bakeoff_votes
         .iter()
         .map(|vote| vote.points_awarded.unwrap_or(SMALL_VOTE_POINTS))
         .sum();

@@ -3,8 +3,9 @@ const API_BASE = resolveApiBase();
 const DEFAULT_DAILY_VOTE_LIMIT = 2;
 const ANNE_DAILY_VOTE_LIMIT = 3;
 const ANNE_NAME = 'anne';
-const BIG_VOTE_POINTS = 2;
+const BIG_VOTE_POINTS = 1.5;
 const SMALL_VOTE_POINTS = 1;
+const ANNE_BONUS_VOTE_POINTS = 0.5;
 
 const displayNameInput = document.querySelector('#display-name');
 const displayNameForm = document.querySelector('#display-name-form');
@@ -670,6 +671,16 @@ function countVotesForToday(movies = [], voter) {
   }, 0);
 }
 
+function formatPointAmount(value) {
+  const safeValue = Number.isFinite(value) ? value : 0;
+  const rounded = Math.round(safeValue * 10) / 10;
+  const formatted = Number.isInteger(rounded)
+    ? rounded.toString()
+    : rounded.toFixed(1).replace(/\.0$/, '');
+  const plural = Math.abs(rounded - 1) < Number.EPSILON ? '' : 's';
+  return `${formatted} point${plural}`;
+}
+
 function normaliseName(name = '') {
   return (name || '').trim().toLowerCase();
 }
@@ -793,7 +804,7 @@ function describeNextVote(votesToday, voterName = '') {
 
   if (votesToday === 0) {
     return {
-      label: `Big vote (+${BIG_VOTE_POINTS} points)`,
+      label: `Big vote (+${formatPointAmount(BIG_VOTE_POINTS)})`,
       disabled: false,
       tooltip: '',
       variant: 'big',
@@ -802,7 +813,7 @@ function describeNextVote(votesToday, voterName = '') {
 
   if (votesToday === 1) {
     return {
-      label: `Small vote (+${SMALL_VOTE_POINTS} point)`,
+      label: `Small vote (+${formatPointAmount(SMALL_VOTE_POINTS)})`,
       disabled: false,
       tooltip: '',
       variant: 'small',
@@ -811,7 +822,7 @@ function describeNextVote(votesToday, voterName = '') {
 
   if (anne && votesToday === 2) {
     return {
-      label: 'Extra Anne vote',
+      label: `Anne bonus (+${formatPointAmount(ANNE_BONUS_VOTE_POINTS)})`,
       disabled: false,
       tooltip: '',
       variant: 'anne',
@@ -819,7 +830,7 @@ function describeNextVote(votesToday, voterName = '') {
   }
 
   return {
-    label: `Small vote (+${SMALL_VOTE_POINTS} point)`,
+    label: `Small vote (+${formatPointAmount(SMALL_VOTE_POINTS)})`,
     disabled: false,
     tooltip: '',
     variant: 'small',
@@ -858,18 +869,21 @@ function renderPoints(container, points = 0) {
 
   container.innerHTML = '';
   const clamped = Math.max(0, Math.min(points, 10));
+  const halfSteps = Math.round(clamped * 2) / 2;
 
-  container.classList.toggle('movie-points--empty', clamped === 0);
+  container.classList.toggle('movie-points--empty', halfSteps === 0);
   container.setAttribute(
     'aria-label',
-    `${clamped} point${clamped === 1 ? '' : 's'}${points > 10 ? ' (10 shown)' : ''}`,
+    `${formatPointAmount(halfSteps)}${points > 10 ? ' (10 shown)' : ''}`,
   );
 
-  const createDot = (filled) => {
+  const createDot = (fillState) => {
     const dot = document.createElement('span');
     dot.className = 'point-dot';
-    if (filled) {
+    if (fillState === 'filled') {
       dot.classList.add('point-dot--filled');
+    } else if (fillState === 'half') {
+      dot.classList.add('point-dot--half');
     }
     return dot;
   };
@@ -880,8 +894,14 @@ function renderPoints(container, points = 0) {
 
     for (let colIndex = 0; colIndex < 5; colIndex += 1) {
       const currentIndex = rowIndex * 5 + colIndex;
-      const isFilled = currentIndex < clamped;
-      row.appendChild(createDot(isFilled));
+      const fillAmount = halfSteps - currentIndex;
+      let fillState = 'empty';
+      if (fillAmount >= 1) {
+        fillState = 'filled';
+      } else if (fillAmount >= 0.5) {
+        fillState = 'half';
+      }
+      row.appendChild(createDot(fillState));
     }
 
     container.appendChild(row);

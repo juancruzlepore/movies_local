@@ -24,7 +24,7 @@ pub struct Movie {
     #[serde(default)]
     pub last_watched_at: Option<DateTime<Utc>>,
     #[serde(default, alias = "votes")]
-    pub points: u32,
+    pub points: f32,
     #[serde(
         default,
         alias = "voters",
@@ -64,7 +64,7 @@ pub struct Vote {
     #[serde(default)]
     pub voted_at: Option<DateTime<Utc>>,
     #[serde(default)]
-    pub points_awarded: Option<u32>,
+    pub points_awarded: Option<f32>,
 }
 
 #[derive(Debug, Deserialize)]
