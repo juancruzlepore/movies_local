@@ -341,6 +341,51 @@ button:disabled {
   font-size: 0.85rem;
 }
 
+.movie-score {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--fg-muted);
+  font-size: 0.85rem;
+}
+
+.points-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.point-circle {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: rgba(148, 163, 184, 0.18);
+  position: relative;
+  overflow: hidden;
+}
+
+.point-circle::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0%,
+    var(--accent) 100%
+  );
+  opacity: 0;
+}
+
+.point-circle--full::after {
+  opacity: 1;
+}
+
+.point-circle--half::after {
+  opacity: 1;
+  clip-path: inset(0 50% 0 0);
+}
+
 .section-header {
   display: flex;
   justify-content: space-between;

@@ -14,7 +14,7 @@ use chrono::{Duration as ChronoDuration, Utc};
 use error::AppError;
 use models::{Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem, Vote, VoteRequest};
 use serde::Deserialize;
-use storage::{Storage, VoteOutcome, DAILY_VOTE_LIMIT, SMALL_VOTE_POINTS};
+use storage::{Storage, VoteOutcome, ANNE_VOTE_POINTS, DAILY_VOTE_LIMIT};
 use tokio::net::TcpListener;
 use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
@@ -246,27 +246,27 @@ fn build_mock_movies() -> Vec<Movie> {
         Vote {
             voter: "Joy".to_string(),
             voted_at: Some(now - ChronoDuration::hours(2)),
-            points_awarded: Some(SMALL_VOTE_POINTS),
+            points_awarded: Some(ANNE_VOTE_POINTS),
         },
         Vote {
             voter: "Waymond".to_string(),
             voted_at: Some(now - ChronoDuration::hours(3)),
-            points_awarded: Some(SMALL_VOTE_POINTS),
+            points_awarded: Some(ANNE_VOTE_POINTS),
         },
         Vote {
             voter: "Becky".to_string(),
             voted_at: Some(now - ChronoDuration::hours(5)),
-            points_awarded: Some(SMALL_VOTE_POINTS),
+            points_awarded: Some(ANNE_VOTE_POINTS),
         },
         Vote {
             voter: "Gong Gong".to_string(),
             voted_at: Some(now - ChronoDuration::hours(8)),
-            points_awarded: Some(SMALL_VOTE_POINTS),
+            points_awarded: Some(ANNE_VOTE_POINTS),
         },
         Vote {
             voter: "Deirdre".to_string(),
             voted_at: Some(now - ChronoDuration::hours(12)),
-            points_awarded: Some(SMALL_VOTE_POINTS),
+            points_awarded: Some(ANNE_VOTE_POINTS),
         },
     ];
 
@@ -274,17 +274,17 @@ fn build_mock_movies() -> Vec<Movie> {
         Vote {
             voter: "Gwen".to_string(),
             voted_at: Some(now - ChronoDuration::hours(4)),
-            points_awarded: Some(SMALL_VOTE_POINTS),
+            points_awarded: Some(ANNE_VOTE_POINTS),
         },
         Vote {
             voter: "Peter B.".to_string(),
             voted_at: Some(now - ChronoDuration::hours(6)),
-            points_awarded: Some(SMALL_VOTE_POINTS),
+            points_awarded: Some(ANNE_VOTE_POINTS),
         },
         Vote {
             voter: "Hobie".to_string(),
             voted_at: Some(now - ChronoDuration::hours(7)),
-            points_awarded: Some(SMALL_VOTE_POINTS),
+            points_awarded: Some(ANNE_VOTE_POINTS),
         },
     ];
 
@@ -292,26 +292,26 @@ fn build_mock_movies() -> Vec<Movie> {
         Vote {
             voter: "Prue".to_string(),
             voted_at: Some(now - ChronoDuration::hours(10)),
-            points_awarded: Some(SMALL_VOTE_POINTS),
+            points_awarded: Some(ANNE_VOTE_POINTS),
         },
         Vote {
             voter: "Noel".to_string(),
             voted_at: Some(now - ChronoDuration::hours(16)),
-            points_awarded: Some(SMALL_VOTE_POINTS),
+            points_awarded: Some(ANNE_VOTE_POINTS),
         },
     ];
 
-    let eeaao_points: u32 = eeaao_votes
+    let eeaao_points: f32 = eeaao_votes
         .iter()
-        .map(|vote| vote.points_awarded.unwrap_or(SMALL_VOTE_POINTS))
+        .map(|vote| vote.points_awarded.unwrap_or(ANNE_VOTE_POINTS))
         .sum();
-    let spiderverse_points: u32 = spiderverse_votes
+    let spiderverse_points: f32 = spiderverse_votes
         .iter()
-        .map(|vote| vote.points_awarded.unwrap_or(SMALL_VOTE_POINTS))
+        .map(|vote| vote.points_awarded.unwrap_or(ANNE_VOTE_POINTS))
         .sum();
-    let bakeoff_points: u32 = bakeoff_votes
+    let bakeoff_points: f32 = bakeoff_votes
         .iter()
-        .map(|vote| vote.points_awarded.unwrap_or(SMALL_VOTE_POINTS))
+        .map(|vote| vote.points_awarded.unwrap_or(ANNE_VOTE_POINTS))
         .sum();
 
     vec![

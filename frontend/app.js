@@ -1,8 +1,8 @@
 const API_STORAGE_KEY = 'movies-local-api-base';
 const API_BASE = resolveApiBase();
 const DAILY_VOTE_LIMIT = 2;
-const BIG_VOTE_POINTS = 2;
-const SMALL_VOTE_POINTS = 1;
+const BIG_VOTE_POINTS = 1.5;
+const ANNE_VOTE_POINTS = 0.5;
 
 const displayNameInput = document.querySelector('#display-name');
 const displayNameForm = document.querySelector('#display-name-form');
@@ -304,7 +304,8 @@ function buildMovieElement(movie) {
 
   const voteButton = element.querySelector('.vote-button');
   const pointsLabel = element.querySelector('.movie-points');
-  pointsLabel.textContent = formatPoints(getPoints(movie));
+  const pointsIndicator = element.querySelector('.points-indicator');
+  updatePointsDisplay(pointsLabel, pointsIndicator, getPoints(movie));
 
   const voter = displayNameInput.value.trim();
   const votesToday = voter ? countVotesForToday(latestMovies, voter) : 0;
@@ -314,7 +315,7 @@ function buildMovieElement(movie) {
   voteButton.title = tooltip;
 
   voteButton.addEventListener('click', () =>
-    voteForMovie(movie.id, voteButton, pointsLabel),
+    voteForMovie(movie.id, voteButton, pointsLabel, pointsIndicator),
   );
 
   const watchedButton = element.querySelector('.watched-button');
@@ -485,7 +486,63 @@ function getVoteHistory(movie = {}) {
 }
 
 function formatPoints(points = 0) {
-  return points === 1 ? '1 point' : `${points} points`;
+  const numeric = normalisePoints(points);
+  const unit = Math.abs(numeric) === 1 ? 'point' : 'points';
+  return `${formatPointsValue(numeric)} ${unit}`;
+}
+
+function formatPointsValue(points = 0) {
+  const numeric = normalisePoints(points);
+  if (Number.isInteger(numeric)) {
+    return String(numeric);
+  }
+  return numeric.toFixed(1).replace(/\.0$/, '');
+}
+
+function normalisePoints(points = 0) {
+  const numeric = Number(points);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return 0;
+  }
+  return Math.round(numeric * 2) / 2;
+}
+
+function updatePointsDisplay(pointsLabel, pointsIndicator, points) {
+  const numeric = normalisePoints(points);
+  if (pointsLabel) {
+    pointsLabel.textContent = formatPoints(numeric);
+  }
+  renderPointsIndicator(pointsIndicator, numeric);
+}
+
+function renderPointsIndicator(container, points = 0) {
+  if (!container) return;
+
+  const numeric = normalisePoints(points);
+  const halfSteps = Math.round(numeric * 2);
+  container.innerHTML = '';
+  if (halfSteps <= 0) return;
+
+  const fragment = document.createDocumentFragment();
+  const fullCircles = Math.floor(halfSteps / 2);
+  const hasHalf = halfSteps % 2 === 1;
+
+  for (let index = 0; index < fullCircles; index += 1) {
+    fragment.append(createPointCircle('point-circle point-circle--full'));
+  }
+
+  if (hasHalf) {
+    fragment.append(createPointCircle('point-circle point-circle--half'));
+  }
+
+  container.append(fragment);
+}
+
+function createPointCircle(className) {
+  const circle = document.createElement('span');
+  circle.className = className;
+  circle.setAttribute('aria-hidden', 'true');
+  return circle;
 }
 
 function formatRuntime(value) {
@@ -555,7 +612,7 @@ function countVotesForToday(movies = [], voter) {
   }, 0);
 }
 
-async function voteForMovie(movieId, button, pointsLabel) {
+async function voteForMovie(movieId, button, pointsLabel, pointsIndicator) {
   if (!movieId) return;
 
   const voter = requireDisplayName('Save your name before voting.');
@@ -595,7 +652,7 @@ async function voteForMovie(movieId, button, pointsLabel) {
 
     const updated = await response.json();
     const points = getPoints(updated);
-    pointsLabel.textContent = formatPoints(points);
+    updatePointsDisplay(pointsLabel, pointsIndicator, points);
     setFeedback('Thanks for voting!');
     await fetchMovies({ showLoading: false });
   } catch (error) {
@@ -643,7 +700,7 @@ async function markMovieWatched(movieId, button) {
 function describeNextVote(votesToday) {
   if (votesToday <= 0) {
     return {
-      label: `Big vote (+${BIG_VOTE_POINTS} points)`,
+      label: `Big vote (+${formatPoints(BIG_VOTE_POINTS)})`,
       disabled: false,
       tooltip: '',
     };
@@ -651,7 +708,7 @@ function describeNextVote(votesToday) {
 
   if (votesToday === 1) {
     return {
-      label: `Small vote (+${SMALL_VOTE_POINTS} point)`,
+      label: `Anne vote (+${formatPoints(ANNE_VOTE_POINTS)})`,
       disabled: false,
       tooltip: '',
     };
