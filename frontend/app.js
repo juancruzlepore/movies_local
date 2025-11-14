@@ -1,6 +1,8 @@
 const API_STORAGE_KEY = 'movies-local-api-base';
 const API_BASE = resolveApiBase();
-const DAILY_VOTE_LIMIT = 2;
+const DEFAULT_DAILY_VOTE_LIMIT = 2;
+const ANNE_DAILY_VOTE_LIMIT = 3;
+const ANNE_NAME = 'anne';
 const BIG_VOTE_POINTS = 2;
 const SMALL_VOTE_POINTS = 1;
 
@@ -17,7 +19,10 @@ const searchFeedback = document.querySelector('#search-feedback');
 const moviesListByPoints = document.querySelector('#movies-list-by-points');
 const moviesListByRecent = document.querySelector('#movies-list-by-recent');
 const refreshMoviesButton = document.querySelector('#refresh-movies');
+const moviesFilterInput = document.querySelector('#movies-filter');
 const dailyVoteCounter = document.querySelector('#daily-vote-count');
+const tabButtons = Array.from(document.querySelectorAll('.tab-button'));
+const tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
 
 const resultTemplate = document.querySelector('#result-item-template');
 const movieTemplate = document.querySelector('#movie-item-template');
@@ -25,6 +30,7 @@ const movieTemplate = document.querySelector('#movie-item-template');
 const STORAGE_KEY = 'movies-local-display-name';
 
 let latestMovies = [];
+let activeMovieFilter = '';
 
 function resolveApiBase() {
   const candidate =
@@ -213,8 +219,11 @@ async function fetchMovies(options = {}) {
   }
 }
 
-function renderMovies(movies) {
-  const moviesByPoints = [...movies].sort((a, b) => {
+function renderMovies(movies = []) {
+  const filter = activeMovieFilter;
+  const filteredMovies = !filter ? movies : movies.filter((movie) => movieMatchesFilter(movie, filter));
+
+  const moviesByPoints = [...filteredMovies].sort((a, b) => {
     const pointsDiff = (getPoints(b) - getPoints(a));
     if (pointsDiff !== 0) return pointsDiff;
     const titleA = a.title ?? '';
@@ -222,7 +231,7 @@ function renderMovies(movies) {
     return titleA.localeCompare(titleB);
   });
 
-  const moviesByRecent = [...movies].sort((a, b) => {
+  const moviesByRecent = [...filteredMovies].sort((a, b) => {
     const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
     const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
     if (timeA === timeB) {
@@ -233,16 +242,42 @@ function renderMovies(movies) {
     return timeB - timeA;
   });
 
-  renderMovieList(moviesListByPoints, moviesByPoints);
-  renderMovieList(moviesListByRecent, moviesByRecent);
+  const filtered = Boolean(filter);
+  renderMovieList(moviesListByPoints, moviesByPoints, { filtered });
+  renderMovieList(moviesListByRecent, moviesByRecent, { filtered });
 }
 
-function renderMovieList(container, movies) {
+function normaliseFilterValue(value = '') {
+  return (value || '').toString().trim().toLowerCase();
+}
+
+function movieMatchesFilter(movie, filter) {
+  const query = normaliseFilterValue(filter);
+  if (!query) return true;
+
+  const fields = [
+    movie && movie.title,
+    movie && movie.year,
+    movie && movie.media_type,
+    movie && movie.added_by,
+  ];
+
+  return fields.some((field) => {
+    if (field == null) return false;
+    return String(field).toLowerCase().includes(query);
+  });
+}
+
+function renderMovieList(container, movies, options = {}) {
+  const { filtered = false } = options;
+
   container.innerHTML = '';
 
   if (!movies.length) {
     const empty = document.createElement('p');
-    empty.textContent = 'Nothing here yet. Find something great to watch!';
+    empty.textContent = filtered
+      ? 'No matches found. Try a different filter.'
+      : 'Nothing here yet. Find something great to watch!';
     empty.className = 'movie-empty';
     container.append(empty);
     return;
@@ -254,6 +289,81 @@ function renderMovieList(container, movies) {
   }
 
   container.append(fragment);
+}
+
+function activateTab(panelId) {
+  if (!panelId) return false;
+
+  const targetPanel = tabPanels.find((panel) => panel.id === panelId);
+  if (!targetPanel) return false;
+
+  tabButtons.forEach((button) => {
+    const controls = button.getAttribute('aria-controls');
+    const isActive = controls === panelId;
+    button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    button.tabIndex = isActive ? 0 : -1;
+  });
+
+  tabPanels.forEach((panel) => {
+    const isActive = panel.id === panelId;
+    panel.hidden = !isActive;
+    panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');
+  });
+
+  return true;
+}
+
+function focusTabAtIndex(index) {
+  if (!tabButtons.length) return;
+  const total = tabButtons.length;
+  const targetIndex = ((index % total) + total) % total;
+  const button = tabButtons[targetIndex];
+  if (button) {
+    button.focus();
+  }
+}
+
+function setupTabs() {
+  if (!tabButtons.length || !tabPanels.length) return;
+
+  if (!activateTab('shared-list-panel')) {
+    const fallbackPanel = tabPanels[0];
+    if (fallbackPanel) {
+      activateTab(fallbackPanel.id);
+    }
+  }
+
+  tabButtons.forEach((button, index) => {
+    button.addEventListener('click', () => {
+      const targetPanelId = button.getAttribute('aria-controls');
+      activateTab(targetPanelId);
+    });
+
+    button.addEventListener('keydown', (event) => {
+      switch (event.key) {
+        case 'ArrowRight':
+        case 'ArrowDown':
+          event.preventDefault();
+          focusTabAtIndex(index + 1);
+          break;
+        case 'ArrowLeft':
+        case 'ArrowUp':
+          event.preventDefault();
+          focusTabAtIndex(index - 1);
+          break;
+        case 'Home':
+          event.preventDefault();
+          focusTabAtIndex(0);
+          break;
+        case 'End':
+          event.preventDefault();
+          focusTabAtIndex(tabButtons.length - 1);
+          break;
+        default:
+          break;
+      }
+    });
+  });
 }
 
 function buildMovieElement(movie) {
@@ -283,45 +393,46 @@ function buildMovieElement(movie) {
     img.decoding = 'async';
     posterContainer.appendChild(img);
     posterContainer.removeAttribute('aria-hidden');
+    posterContainer.classList.remove('movie-poster--placeholder');
   } else {
     posterContainer.textContent = 'No poster yet';
     posterContainer.setAttribute('aria-hidden', 'true');
-  }
-
-  const added = movie.added_by ? `${movie.added_by}` : 'Unknown friend';
-  const timestamp = movie.created_at ? formatTimestamp(movie.created_at) : '';
-  element.querySelector('.movie-added').textContent = `${added}${timestamp ? ` • ${timestamp}` : ''}`;
-
-  const watchedLabel = element.querySelector('.movie-watched');
-  const lastWatched = formatLastWatched(movie.last_watched_at);
-  if (lastWatched) {
-    watchedLabel.textContent = lastWatched;
-    watchedLabel.hidden = false;
-  } else {
-    watchedLabel.textContent = '';
-    watchedLabel.hidden = true;
+    posterContainer.classList.add('movie-poster--placeholder');
   }
 
   const voteButton = element.querySelector('.vote-button');
   const pointsLabel = element.querySelector('.movie-points');
-  pointsLabel.textContent = formatPoints(getPoints(movie));
+  renderPoints(pointsLabel, getPoints(movie));
 
   const voter = displayNameInput.value.trim();
   const votesToday = voter ? countVotesForToday(latestMovies, voter) : 0;
-  const { label, disabled, tooltip } = describeNextVote(votesToday);
+  const { label, disabled, tooltip, variant } = describeNextVote(votesToday, voter);
   voteButton.textContent = label;
   voteButton.disabled = disabled;
   voteButton.title = tooltip;
+  applyVoteButtonVariant(voteButton, variant);
 
   voteButton.addEventListener('click', () =>
     voteForMovie(movie.id, voteButton, pointsLabel),
   );
 
-  const watchedButton = element.querySelector('.watched-button');
-  if (watchedButton) {
-    watchedButton.addEventListener('click', () =>
-      markMovieWatched(movie.id, watchedButton),
-    );
+  const markWatchedButton = element.querySelector('.mark-watched');
+  if (markWatchedButton) {
+    const watchedToday = isWatchedToday(movie.last_watched_at);
+    if (watchedToday) {
+      markWatchedButton.textContent = 'Watched ✓';
+      markWatchedButton.disabled = true;
+      markWatchedButton.setAttribute('aria-disabled', 'true');
+      markWatchedButton.title = 'Already logged for today';
+    } else {
+      markWatchedButton.textContent = 'Mark as watched';
+      markWatchedButton.disabled = false;
+      markWatchedButton.removeAttribute('aria-disabled');
+      markWatchedButton.title = 'Reset points and log a rewatch';
+      markWatchedButton.addEventListener('click', () =>
+        markMovieWatched(movie.id, markWatchedButton),
+      );
+    }
   }
 
   return element;
@@ -484,10 +595,6 @@ function getVoteHistory(movie = {}) {
   return [];
 }
 
-function formatPoints(points = 0) {
-  return points === 1 ? '1 point' : `${points} points`;
-}
-
 function formatRuntime(value) {
   if (value == null) return '';
   const minutes = Number(value);
@@ -497,12 +604,6 @@ function formatRuntime(value) {
   if (hours > 0 && remaining > 0) return `${hours}h ${remaining}m`;
   if (hours > 0) return `${hours}h`;
   return `${minutes}m`;
-}
-
-function formatLastWatched(value) {
-  if (!value) return '';
-  const formatted = formatTimestamp(value);
-  return formatted ? `Last watched: ${formatted}` : '';
 }
 
 function updateDailyVoteCount(movies = []) {
@@ -515,16 +616,30 @@ function updateDailyVoteCount(movies = []) {
   }
 
   const votesToday = countVotesForToday(movies, voter);
-  const remaining = Math.max(DAILY_VOTE_LIMIT - votesToday, 0);
-  const baseMessage = `You have used ${votesToday} of ${DAILY_VOTE_LIMIT} votes today.`;
+  const limit = getDailyVoteLimit(voter);
+  const remaining = Math.max(limit - votesToday, 0);
+  const baseMessage = `You have used ${votesToday} of ${limit} votes today.`;
   dailyVoteCounter.textContent =
-    votesToday >= DAILY_VOTE_LIMIT && remaining === 0
+    votesToday >= limit && remaining === 0
       ? `${baseMessage} Limit reached.`
       : baseMessage;
 }
 
+function isWatchedToday(value) {
+  if (!value) return false;
+  const watchedDate = new Date(value);
+  if (Number.isNaN(watchedDate.getTime())) return false;
+
+  const today = new Date();
+  return (
+    watchedDate.getFullYear() === today.getFullYear() &&
+    watchedDate.getMonth() === today.getMonth() &&
+    watchedDate.getDate() === today.getDate()
+  );
+}
+
 function countVotesForToday(movies = [], voter) {
-  const normalisedVoter = voter.trim().toLowerCase();
+  const normalisedVoter = normaliseName(voter);
   if (!normalisedVoter) return 0;
 
   const today = new Date();
@@ -555,24 +670,43 @@ function countVotesForToday(movies = [], voter) {
   }, 0);
 }
 
+function normaliseName(name = '') {
+  return (name || '').trim().toLowerCase();
+}
+
+function isAnneName(name = '') {
+  return normaliseName(name) === ANNE_NAME;
+}
+
+function getDailyVoteLimit(name = '') {
+  return isAnneName(name) ? ANNE_DAILY_VOTE_LIMIT : DEFAULT_DAILY_VOTE_LIMIT;
+}
+
 async function voteForMovie(movieId, button, pointsLabel) {
   if (!movieId) return;
+
+  const draftName = displayNameInput.value.trim();
+  const initialVotesToday = draftName ? countVotesForToday(latestMovies, draftName) : 0;
 
   const voter = requireDisplayName('Save your name before voting.');
   if (!voter) {
     button.disabled = false;
     button.title = '';
+    const { variant: currentVariant } = describeNextVote(initialVotesToday, draftName);
+    applyVoteButtonVariant(button, currentVariant);
     return;
   }
 
   const votesToday = countVotesForToday(latestMovies, voter);
-  if (votesToday >= DAILY_VOTE_LIMIT) {
-    setFeedback(`You have used your ${DAILY_VOTE_LIMIT} votes for today.`);
+  const dailyLimit = getDailyVoteLimit(voter);
+  if (votesToday >= dailyLimit) {
+    setFeedback(`You have used your ${dailyLimit} votes for today.`);
     updateDailyVoteCount(latestMovies);
-    const { label, tooltip } = describeNextVote(votesToday);
+    const { label, tooltip, variant: variantOnLimit } = describeNextVote(votesToday, voter);
     button.disabled = true;
     button.textContent = label;
     button.title = tooltip;
+    applyVoteButtonVariant(button, variantOnLimit);
     return;
   }
 
@@ -595,7 +729,7 @@ async function voteForMovie(movieId, button, pointsLabel) {
 
     const updated = await response.json();
     const points = getPoints(updated);
-    pointsLabel.textContent = formatPoints(points);
+    renderPoints(pointsLabel, points);
     setFeedback('Thanks for voting!');
     await fetchMovies({ showLoading: false });
   } catch (error) {
@@ -603,10 +737,14 @@ async function voteForMovie(movieId, button, pointsLabel) {
     setFeedback(error.message || 'Unable to register your vote.');
   } finally {
     const updatedVotesToday = countVotesForToday(latestMovies, voter);
-    const { label, disabled, tooltip } = describeNextVote(updatedVotesToday);
+    const { label, disabled, tooltip, variant: updatedVariant } = describeNextVote(
+      updatedVotesToday,
+      voter,
+    );
     button.disabled = disabled;
     button.textContent = label;
     button.title = tooltip;
+    applyVoteButtonVariant(button, updatedVariant);
   }
 }
 
@@ -635,17 +773,30 @@ async function markMovieWatched(movieId, button) {
     console.error(error);
     setFeedback(error.message || 'Unable to mark as watched.');
     button.disabled = false;
-    button.textContent = 'Watched';
+    button.textContent = 'Mark as watched';
     button.removeAttribute('aria-disabled');
   }
 }
 
-function describeNextVote(votesToday) {
-  if (votesToday <= 0) {
+function describeNextVote(votesToday, voterName = '') {
+  const limit = getDailyVoteLimit(voterName);
+  const anne = isAnneName(voterName);
+
+  if (votesToday >= limit) {
+    return {
+      label: 'No votes left today',
+      disabled: true,
+      tooltip: `Daily limit reached (${limit} votes)`,
+      variant: 'disabled',
+    };
+  }
+
+  if (votesToday === 0) {
     return {
       label: `Big vote (+${BIG_VOTE_POINTS} points)`,
       disabled: false,
       tooltip: '',
+      variant: 'big',
     };
   }
 
@@ -654,31 +805,91 @@ function describeNextVote(votesToday) {
       label: `Small vote (+${SMALL_VOTE_POINTS} point)`,
       disabled: false,
       tooltip: '',
+      variant: 'small',
+    };
+  }
+
+  if (anne && votesToday === 2) {
+    return {
+      label: 'Extra Anne vote',
+      disabled: false,
+      tooltip: '',
+      variant: 'anne',
     };
   }
 
   return {
-    label: 'No votes left today',
-    disabled: true,
-    tooltip: `Daily limit reached (${DAILY_VOTE_LIMIT} votes)`,
+    label: `Small vote (+${SMALL_VOTE_POINTS} point)`,
+    disabled: false,
+    tooltip: '',
+    variant: 'small',
   };
+}
+
+function applyVoteButtonVariant(button, variant) {
+  if (!button) return;
+
+  button.classList.remove('vote-button--big', 'vote-button--small', 'vote-button--anne');
+
+  if (variant === 'big') {
+    button.classList.remove('secondary');
+    button.classList.add('vote-button--big');
+    return;
+  }
+
+  if (variant === 'small') {
+    button.classList.remove('secondary');
+    button.classList.add('vote-button--small');
+    return;
+  }
+
+  if (variant === 'anne') {
+    button.classList.remove('secondary');
+    button.classList.add('vote-button--anne');
+    return;
+  }
+
+  button.classList.remove('vote-button--big', 'vote-button--small', 'vote-button--anne');
+  button.classList.add('secondary');
+}
+
+function renderPoints(container, points = 0) {
+  if (!container) return;
+
+  container.innerHTML = '';
+  const clamped = Math.max(0, Math.min(points, 10));
+
+  container.classList.toggle('movie-points--empty', clamped === 0);
+  container.setAttribute(
+    'aria-label',
+    `${clamped} point${clamped === 1 ? '' : 's'}${points > 10 ? ' (10 shown)' : ''}`,
+  );
+
+  const createDot = (filled) => {
+    const dot = document.createElement('span');
+    dot.className = 'point-dot';
+    if (filled) {
+      dot.classList.add('point-dot--filled');
+    }
+    return dot;
+  };
+
+  for (let rowIndex = 0; rowIndex < 2; rowIndex += 1) {
+    const row = document.createElement('span');
+    row.className = 'points-row';
+
+    for (let colIndex = 0; colIndex < 5; colIndex += 1) {
+      const currentIndex = rowIndex * 5 + colIndex;
+      const isFilled = currentIndex < clamped;
+      row.appendChild(createDot(isFilled));
+    }
+
+    container.appendChild(row);
+  }
 }
 
 function setFeedback(text) {
   searchFeedback.textContent = text;
-}
-
-function formatTimestamp(value) {
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      weekday: 'short',
-      hour: '2-digit',
-      minute: '2-digit',
-    }).format(new Date(value));
-  } catch (error) {
-    console.error('Failed to format date', error);
-    return '';
-  }
 }
 
 async function safeJson(response) {
@@ -723,6 +934,16 @@ searchForm.addEventListener('submit', (event) => {
 refreshMoviesButton.addEventListener('click', () => {
   fetchMovies();
 });
+
+if (moviesFilterInput) {
+  activeMovieFilter = normaliseFilterValue(moviesFilterInput.value);
+  moviesFilterInput.addEventListener('input', () => {
+    activeMovieFilter = normaliseFilterValue(moviesFilterInput.value);
+    renderMovies(latestMovies);
+  });
+}
+
+setupTabs();
 
 hydrateDisplayName();
 

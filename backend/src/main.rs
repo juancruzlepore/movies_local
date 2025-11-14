@@ -14,7 +14,7 @@ use chrono::{Duration as ChronoDuration, Utc};
 use error::AppError;
 use models::{Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem, Vote, VoteRequest};
 use serde::Deserialize;
-use storage::{Storage, VoteOutcome, DAILY_VOTE_LIMIT, SMALL_VOTE_POINTS};
+use storage::{Storage, VoteOutcome, SMALL_VOTE_POINTS};
 use tokio::net::TcpListener;
 use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
@@ -166,14 +166,14 @@ async fn vote_movie(
 
     match state.storage.vote(id, voter.clone()).await? {
         VoteOutcome::PointsAwarded(movie) => Ok(Json(movie)),
-        VoteOutcome::LimitReached => {
+        VoteOutcome::LimitReached { limit } => {
             warn!(
                 "vote rejected voter='{}' movie_id='{}' reason='daily limit'",
                 voter, id
             );
             Err(AppError::TooManyRequests(format!(
                 "Daily vote limit reached ({} per day)",
-                DAILY_VOTE_LIMIT
+                limit
             )))
         }
         VoteOutcome::NotFound => Err(AppError::NotFound("movie not found".into())),
@@ -399,10 +399,16 @@ impl AppState {
         })?;
 
         if payload.response.eq_ignore_ascii_case("true") {
-            let results = payload
+            let results: Vec<SearchResultItem> = payload
                 .search
                 .unwrap_or_default()
                 .into_iter()
+                .filter(|item| {
+                    !matches!(
+                        item.media_type.as_deref(),
+                        Some(media_type) if media_type.eq_ignore_ascii_case("game")
+                    )
+                })
                 .map(SearchResultItem::from_omdb)
                 .collect();
 

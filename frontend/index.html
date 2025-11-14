@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Movies Local</title>
   <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
   <header class="app-header">
     <div class="header-content">
@@ -25,13 +27,7 @@
       <p class="landing-description">Tell us your name so friends know who added what.</p>
       <form id="display-name-form" class="identity-card">
         <label for="display-name">Your name</label>
-        <input
-          id="display-name"
-          type="text"
-          placeholder="How should we credit you?"
-          autocomplete="name"
-          required
-        >
+        <input id="display-name" type="text" placeholder="How should we credit you?" autocomplete="name" required>
         <button class="primary" type="submit">Continue</button>
         <p class="identity-hint">We will store your name in this browser only.</p>
       </form>
@@ -39,8 +35,34 @@
   </section>
 
   <main class="app-main" hidden>
+    <nav class="tab-bar" role="tablist" aria-label="Primary content tabs">
+      <button id="tab-shared-list" class="tab-button" type="button" role="tab" aria-controls="shared-list-panel" aria-selected="true">Shared list</button>
+      <button id="tab-search" class="tab-button" type="button" role="tab" aria-controls="search-panel" aria-selected="false" tabindex="-1">Search</button>
+    </nav>
 
-    <section class="search-card">
+    <section id="shared-list-panel" class="list-card tab-panel" role="tabpanel" aria-labelledby="tab-shared-list" tabindex="0">
+      <header class="section-header">
+        <h2>Shared list</h2>
+        <div class="section-controls">
+          <label class="visually-hidden" for="movies-filter">Filter shared list</label>
+          <input id="movies-filter" type="search" placeholder="Filter list..." autocomplete="off">
+          <button id="refresh-movies" class="secondary">Refresh</button>
+        </div>
+      </header>
+      <p id="daily-vote-count" class="vote-counter" role="status" aria-live="polite"></p>
+      <div class="shared-lists">
+        <section class="list-subsection">
+          <h3 class="list-subtitle">Top picks by points</h3>
+          <ul id="movies-list-by-points" class="card-list"></ul>
+        </section>
+        <section class="list-subsection">
+          <h3 class="list-subtitle">Newest additions</h3>
+          <ul id="movies-list-by-recent" class="card-list"></ul>
+        </section>
+      </div>
+    </section>
+
+    <section id="search-panel" class="search-card tab-panel" role="tabpanel" aria-labelledby="tab-search" tabindex="0" hidden>
       <form id="search-form">
         <label for="search-query">Search IMDB</label>
         <div class="search-group">
@@ -55,24 +77,6 @@
       </form>
       <div id="search-feedback" role="status" aria-live="polite"></div>
       <ul id="search-results" class="card-list"></ul>
-    </section>
-
-    <section class="list-card">
-      <header class="section-header">
-        <h2>Shared list</h2>
-        <button id="refresh-movies" class="secondary">Refresh</button>
-      </header>
-      <p id="daily-vote-count" class="vote-counter" role="status" aria-live="polite"></p>
-      <div class="shared-lists">
-        <section class="list-subsection">
-          <h3 class="list-subtitle">Top picks by points</h3>
-          <ul id="movies-list-by-points" class="card-list"></ul>
-        </section>
-        <section class="list-subsection">
-          <h3 class="list-subtitle">Newest additions</h3>
-          <ul id="movies-list-by-recent" class="card-list"></ul>
-        </section>
-      </div>
     </section>
   </main>
 
@@ -97,17 +101,16 @@
           <h3 class="movie-title"></h3>
           <p class="movie-meta"></p>
         </div>
-        <p class="movie-added"></p>
-        <p class="movie-watched" aria-live="polite"></p>
         <div class="movie-actions">
           <button class="secondary vote-button" type="button">Vote</button>
           <span class="movie-points" aria-live="polite"></span>
-          <button class="secondary watched-button" type="button">Watched</button>
         </div>
+        <button class="mark-watched" type="button">Mark as watched</button>
       </div>
     </li>
   </template>
 
   <script src="app.js" type="module"></script>
 </body>
+
 </html>

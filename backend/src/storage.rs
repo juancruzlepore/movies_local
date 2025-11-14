@@ -9,13 +9,14 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub const DAILY_VOTE_LIMIT: usize = 2;
+pub const ANNE_DAILY_VOTE_LIMIT: usize = 3;
 pub const BIG_VOTE_POINTS: u32 = 2;
 pub const SMALL_VOTE_POINTS: u32 = 1;
 
 #[derive(Debug, Clone)]
 pub enum VoteOutcome {
     PointsAwarded(Movie),
-    LimitReached,
+    LimitReached { limit: usize },
     NotFound,
 }
 
@@ -99,15 +100,12 @@ impl Storage {
             let mut guard = self.inner.write();
             let today = Utc::now().date_naive();
             let votes_today = count_votes_for_day(&guard, &normalised_voter, today);
+            let limit = vote_limit_for(&normalised_voter);
 
-            if votes_today >= DAILY_VOTE_LIMIT {
-                (VoteOutcome::LimitReached, None)
+            if votes_today >= limit {
+                (VoteOutcome::LimitReached { limit }, None)
             } else if let Some(movie) = guard.iter_mut().find(|item| item.id == id) {
-                let points_awarded = if votes_today == 0 {
-                    BIG_VOTE_POINTS
-                } else {
-                    SMALL_VOTE_POINTS
-                };
+                let points_awarded = points_for_vote(votes_today, &normalised_voter);
 
                 movie.vote_history.push(Vote {
                     voter: trimmed_voter.clone(),
@@ -168,12 +166,10 @@ fn recalculate_points(movie: &mut Movie) {
     let points: u32 = movie
         .vote_history
         .iter()
-        .filter(|vote| {
-            match (vote.voted_at, cutoff) {
-                (_, None) => true,
-                (Some(voted_at), Some(threshold)) => voted_at > threshold,
-                (None, Some(_)) => false,
-            }
+        .filter(|vote| match (vote.voted_at, cutoff) {
+            (_, None) => true,
+            (Some(voted_at), Some(threshold)) => voted_at > threshold,
+            (None, Some(_)) => false,
         })
         .map(|vote| vote.points_awarded.unwrap_or(SMALL_VOTE_POINTS))
         .sum();
@@ -194,6 +190,34 @@ fn count_votes_for_day(movies: &[Movie], normalised_voter: &str, day: NaiveDate)
                 && record.voter.trim().to_lowercase() == normalised_voter
         })
         .count()
+}
+
+fn is_anne(normalised_voter: &str) -> bool {
+    normalised_voter == "anne"
+}
+
+fn vote_limit_for(normalised_voter: &str) -> usize {
+    if is_anne(normalised_voter) {
+        ANNE_DAILY_VOTE_LIMIT
+    } else {
+        DAILY_VOTE_LIMIT
+    }
+}
+
+fn points_for_vote(votes_today: usize, normalised_voter: &str) -> u32 {
+    if votes_today == 0 {
+        return BIG_VOTE_POINTS;
+    }
+
+    if votes_today == 1 {
+        return SMALL_VOTE_POINTS;
+    }
+
+    if is_anne(normalised_voter) && votes_today == 2 {
+        return SMALL_VOTE_POINTS;
+    }
+
+    SMALL_VOTE_POINTS
 }
 
 #[cfg(test)]
@@ -324,7 +348,10 @@ mod tests {
             .vote(primary.id, "Trinity".to_string())
             .await
             .expect("third vote");
-        assert!(matches!(third, VoteOutcome::LimitReached));
+        match third {
+            VoteOutcome::LimitReached { limit } => assert_eq!(limit, DAILY_VOTE_LIMIT),
+            other => panic!("expected limit reached, got {:?}", other),
+        }
 
         let movies = storage.list();
         let primary_entry = movies
@@ -355,6 +382,67 @@ mod tests {
             Some(SMALL_VOTE_POINTS)
         );
         assert_eq!(sequel_entry.runtime_minutes, Some(136));
+    }
+
+    #[tokio::test]
+    async fn anne_receives_extra_vote() {
+        let path = temp_storage_path();
+        let storage = Storage::initialise(path).await.expect("init storage");
+
+        let primary = storage
+            .add(sample_movie_request())
+            .await
+            .expect("add movie");
+
+        let mut sequel_request = sample_movie_request();
+        sequel_request.title = "The Matrix Reloaded".to_string();
+        sequel_request.imdb_id = "tt0234215".to_string();
+        let sequel = storage.add(sequel_request).await.expect("add sequel");
+
+        let first = storage
+            .vote(primary.id, "Anne".to_string())
+            .await
+            .expect("first vote");
+        assert!(matches!(first, VoteOutcome::PointsAwarded(_)));
+
+        let second = storage
+            .vote(sequel.id, "Anne".to_string())
+            .await
+            .expect("second vote");
+        assert!(matches!(second, VoteOutcome::PointsAwarded(_)));
+
+        let third = storage
+            .vote(primary.id, "Anne".to_string())
+            .await
+            .expect("third vote");
+
+        let primary_after_third = match third {
+            VoteOutcome::PointsAwarded(movie) => movie,
+            other => panic!("expected updated movie, got {:?}", other),
+        };
+
+        assert_eq!(
+            primary_after_third.points,
+            BIG_VOTE_POINTS + SMALL_VOTE_POINTS
+        );
+        assert_eq!(primary_after_third.vote_history.len(), 2);
+        assert_eq!(
+            primary_after_third
+                .vote_history
+                .last()
+                .and_then(|vote| vote.points_awarded),
+            Some(SMALL_VOTE_POINTS)
+        );
+
+        let fourth = storage
+            .vote(sequel.id, "Anne".to_string())
+            .await
+            .expect("fourth vote");
+
+        match fourth {
+            VoteOutcome::LimitReached { limit } => assert_eq!(limit, ANNE_DAILY_VOTE_LIMIT),
+            other => panic!("expected limit reached, got {:?}", other),
+        }
     }
 
     #[tokio::test]
