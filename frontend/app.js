@@ -109,6 +109,17 @@ function setDisplayName(name) {
   localStorage.setItem(STORAGE_KEY, name);
 }
 
+function updateChangeNameButtonLabel(name) {
+  if (!changeNameButton) return;
+  const displayName =
+    (typeof name === 'string' && name.trim()) ||
+    (displayNameInput && displayNameInput.value.trim()) ||
+    getDisplayName();
+
+  if (!displayName) return;
+  changeNameButton.textContent = displayName;
+}
+
 function hydrateDisplayName() {
   const savedName = getDisplayName();
   if (savedName) {
@@ -932,6 +943,7 @@ if (displayNameForm) {
     }
 
     setDisplayName(name);
+    updateChangeNameButtonLabel(name);
     completeNameSetup({ message: 'Name saved!' });
   });
 }
@@ -966,6 +978,7 @@ if (moviesFilterInput) {
 setupTabs();
 
 hydrateDisplayName();
+updateChangeNameButtonLabel();
 
 if (displayNameInput.value.trim()) {
   completeNameSetup({ message: 'Ready when you are!' });
