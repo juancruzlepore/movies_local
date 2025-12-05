@@ -13,11 +13,11 @@ use axum::{Json, Router};
 use chrono::{Duration as ChronoDuration, Utc};
 use error::AppError;
 use models::{
-    Household, HouseholdRequest, Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem, Vote,
-    VoteRequest,
+    Household, HouseholdRequest, Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem,
+    Vote, VoteRequest,
 };
 use serde::Deserialize;
-use storage::{Storage, VoteOutcome, SMALL_VOTE_POINTS};
+use storage::{Storage, StorageConfig, VoteOutcome, SMALL_VOTE_POINTS};
 use tokio::net::TcpListener;
 use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
@@ -47,6 +47,8 @@ async fn main() -> Result<(), anyhow::Error> {
     let data_path = env::var("MOVIES_DB_PATH").unwrap_or_else(|_| "data/movies.json".to_string());
     let bind_addr = env::var("BIND_ADDRESS").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
     let omdb_api_key = env::var("OMDB_API_KEY").ok();
+    let s3_bucket = env::var("MOVIES_DB_S3_BUCKET").ok();
+    let s3_key = env::var("MOVIES_DB_S3_KEY").unwrap_or_else(|_| "movies.json".to_string());
 
     let use_mock_data = matches!(
         env::var("MOCK_MOVIE_DATA")
@@ -55,7 +57,13 @@ async fn main() -> Result<(), anyhow::Error> {
         Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
     );
 
-    let storage = Storage::initialise(data_path.into()).await?;
+    let storage_config = if let Some(bucket) = s3_bucket {
+        StorageConfig::s3(bucket, s3_key)
+    } else {
+        StorageConfig::local(data_path.into())
+    };
+
+    let storage = Storage::initialise(storage_config).await?;
     let client = reqwest::Client::builder()
         .no_proxy()
         .use_rustls_tls()
@@ -83,10 +91,22 @@ async fn main() -> Result<(), anyhow::Error> {
         .route("/health", get(health))
         .route("/households", get(list_households).post(create_household))
         .route("/households/:id/users", post(add_user))
-        .route("/households/:id/users/:name", axum::routing::delete(remove_user))
-        .route("/households/:household_id/movies", get(list_movies).post(add_movie))
-        .route("/households/:household_id/movies/:id/votes", post(vote_movie))
-        .route("/households/:household_id/movies/:id/watch", post(mark_watched))
+        .route(
+            "/households/:id/users/:name",
+            axum::routing::delete(remove_user),
+        )
+        .route(
+            "/households/:household_id/movies",
+            get(list_movies).post(add_movie),
+        )
+        .route(
+            "/households/:household_id/movies/:id/votes",
+            post(vote_movie),
+        )
+        .route(
+            "/households/:household_id/movies/:id/watch",
+            post(mark_watched),
+        )
         .route("/search", get(search_movies))
         .with_state(state)
         .layer(cors);

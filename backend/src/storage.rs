@@ -1,11 +1,12 @@
-use std::path::PathBuf;
-
-use parking_lot::RwLock;
-use tokio::fs;
-
 use crate::models::{AppData, Household, Movie, NewMovie, Vote};
+use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::primitives::ByteStream;
+use aws_sdk_s3::Client as S3Client;
 use chrono::{NaiveDate, Utc};
+use parking_lot::RwLock;
+use std::path::PathBuf;
 use thiserror::Error;
+use tokio::fs;
 use uuid::Uuid;
 
 pub const DAILY_VOTE_LIMIT: usize = 2;
@@ -27,49 +28,82 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
     #[error("data serialization error: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("s3 error: {0}")]
+    S3(String),
     #[error("not found")]
     NotFound,
 }
 
+#[derive(Debug, Clone)]
+pub struct S3Config {
+    pub bucket: String,
+    pub key: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum StorageBackendConfig {
+    Local { path: PathBuf },
+    S3(S3Config),
+}
+
+#[derive(Debug, Clone)]
+pub struct StorageConfig {
+    pub backend: StorageBackendConfig,
+}
+
+impl StorageConfig {
+    pub fn local(path: PathBuf) -> Self {
+        Self {
+            backend: StorageBackendConfig::Local { path },
+        }
+    }
+
+    pub fn s3(bucket: String, key: String) -> Self {
+        Self {
+            backend: StorageBackendConfig::S3(S3Config { bucket, key }),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum StorageBackend {
+    Local {
+        path: PathBuf,
+    },
+    S3 {
+        bucket: String,
+        key: String,
+        client: S3Client,
+    },
+}
+
 #[derive(Debug)]
 pub struct Storage {
-    path: PathBuf,
+    backend: StorageBackend,
     inner: RwLock<AppData>,
 }
 
 impl Storage {
-    pub async fn initialise(path: PathBuf) -> Result<Self, StorageError> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).await?;
-        }
-
-        let app_data = if fs::try_exists(&path).await? {
-            let contents = fs::read(&path).await?;
-            if contents.is_empty() {
-                AppData::default()
-            } else {
-                // Try to parse as AppData first
-                match serde_json::from_slice::<AppData>(&contents) {
-                    Ok(data) => data,
-                    Err(_) => {
-                        // Fallback: Try to parse as Vec<Movie> (legacy)
-                        let movies: Vec<Movie> = serde_json::from_slice(&contents)?;
-                        let default_household = Household {
-                            id: Uuid::new_v4(),
-                            name: "Default Household".to_string(),
-                            users: Vec::new(), // Legacy data didn't have users, so start empty or maybe infer?
-                            movies,
-                            created_at: Utc::now(),
-                        };
-                        AppData {
-                            households: vec![default_household],
-                        }
-                    }
+    pub async fn initialise(config: StorageConfig) -> Result<Self, StorageError> {
+        let backend = match config.backend {
+            StorageBackendConfig::Local { path } => {
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).await?;
+                }
+                StorageBackend::Local { path }
+            }
+            StorageBackendConfig::S3(s3_config) => {
+                let shared_config = aws_config::load_from_env().await;
+                let client = S3Client::new(&shared_config);
+                StorageBackend::S3 {
+                    bucket: s3_config.bucket,
+                    key: s3_config.key,
+                    client,
                 }
             }
-        } else {
-            AppData::default()
         };
+
+        let app_data = load_app_data(&backend).await?;
 
         // Normalise movies in all households
         let normalised_households = app_data
@@ -82,11 +116,15 @@ impl Storage {
             .collect();
 
         Ok(Self {
-            path,
+            backend,
             inner: RwLock::new(AppData {
                 households: normalised_households,
             }),
         })
+    }
+
+    pub async fn initialise_local(path: PathBuf) -> Result<Self, StorageError> {
+        Self::initialise(StorageConfig::local(path)).await
     }
 
     pub fn list_households(&self) -> Vec<Household> {
@@ -113,7 +151,11 @@ impl Storage {
         Ok(household)
     }
 
-    pub async fn add_user(&self, household_id: Uuid, name: String) -> Result<Household, StorageError> {
+    pub async fn add_user(
+        &self,
+        household_id: Uuid,
+        name: String,
+    ) -> Result<Household, StorageError> {
         let (household, snapshot) = {
             let mut guard = self.inner.write();
             if let Some(household) = guard.households.iter_mut().find(|h| h.id == household_id) {
@@ -133,7 +175,11 @@ impl Storage {
         household.ok_or(StorageError::NotFound)
     }
 
-    pub async fn remove_user(&self, household_id: Uuid, name: String) -> Result<Household, StorageError> {
+    pub async fn remove_user(
+        &self,
+        household_id: Uuid,
+        name: String,
+    ) -> Result<Household, StorageError> {
         let (household, snapshot) = {
             let mut guard = self.inner.write();
             if let Some(household) = guard.households.iter_mut().find(|h| h.id == household_id) {
@@ -272,7 +318,26 @@ impl Storage {
 
     async fn persist(&self, data: &AppData) -> Result<(), StorageError> {
         let serialised = serde_json::to_vec_pretty(data)?;
-        fs::write(&self.path, serialised).await?;
+        match &self.backend {
+            StorageBackend::Local { path } => {
+                fs::write(path, &serialised).await?;
+            }
+            StorageBackend::S3 {
+                bucket,
+                key,
+                client,
+            } => {
+                let body = ByteStream::from(serialised);
+                client
+                    .put_object()
+                    .bucket(bucket)
+                    .key(key)
+                    .body(body)
+                    .send()
+                    .await
+                    .map_err(|err| StorageError::S3(format!("{:?}", err)))?;
+            }
+        }
         Ok(())
     }
 }
@@ -280,6 +345,65 @@ impl Storage {
 fn normalise_movie(mut movie: Movie) -> Movie {
     recalculate_points(&mut movie);
     movie
+}
+
+async fn load_app_data(backend: &StorageBackend) -> Result<AppData, StorageError> {
+    match backend {
+        StorageBackend::Local { path } => load_from_local(path).await,
+        StorageBackend::S3 {
+            bucket,
+            key,
+            client,
+        } => load_from_s3(client, bucket, key).await,
+    }
+}
+
+async fn load_from_local(path: &PathBuf) -> Result<AppData, StorageError> {
+    if fs::try_exists(path).await? {
+        let contents = fs::read(path).await?;
+        decode_app_data(&contents)
+    } else {
+        Ok(AppData::default())
+    }
+}
+
+async fn load_from_s3(client: &S3Client, bucket: &str, key: &str) -> Result<AppData, StorageError> {
+    match client.get_object().bucket(bucket).key(key).send().await {
+        Ok(output) => {
+            let bytes = output
+                .body
+                .collect()
+                .await
+                .map_err(|err| StorageError::S3(err.to_string()))?
+                .into_bytes();
+            decode_app_data(bytes.as_ref())
+        }
+        Err(SdkError::ServiceError(err)) if err.err().is_no_such_key() => Ok(AppData::default()),
+        Err(err) => Err(StorageError::S3(err.to_string())),
+    }
+}
+
+fn decode_app_data(contents: &[u8]) -> Result<AppData, StorageError> {
+    if contents.is_empty() {
+        return Ok(AppData::default());
+    }
+
+    match serde_json::from_slice::<AppData>(contents) {
+        Ok(data) => Ok(data),
+        Err(_) => {
+            let movies: Vec<Movie> = serde_json::from_slice(contents)?;
+            let default_household = Household {
+                id: Uuid::new_v4(),
+                name: "Default Household".to_string(),
+                users: Vec::new(),
+                movies,
+                created_at: Utc::now(),
+            };
+            Ok(AppData {
+                households: vec![default_household],
+            })
+        }
+    }
 }
 
 fn recalculate_points(movie: &mut Movie) {
@@ -371,7 +495,7 @@ mod tests {
     #[tokio::test]
     async fn add_persists_movie() {
         let path = temp_storage_path();
-        let storage = Storage::initialise(path.clone())
+        let storage = Storage::initialise_local(path.clone())
             .await
             .expect("init storage");
 
@@ -406,7 +530,7 @@ mod tests {
     #[tokio::test]
     async fn vote_updates_movie_and_persists() {
         let path = temp_storage_path();
-        let storage = Storage::initialise(path.clone())
+        let storage = Storage::initialise_local(path.clone())
             .await
             .expect("init storage");
 
@@ -439,7 +563,6 @@ mod tests {
         assert_eq!(updated.runtime_minutes, Some(136));
 
         let persisted = fs::read(&path).await.expect("read persisted file");
-        let persisted = fs::read(&path).await.expect("read persisted file");
         let parsed: AppData = serde_json::from_slice(&persisted).expect("parse persisted data");
         let saved_movie = &parsed.households[0].movies[0];
         assert_eq!(saved_movie.points, BIG_VOTE_POINTS);
@@ -455,7 +578,7 @@ mod tests {
     #[tokio::test]
     async fn vote_enforces_daily_limit() {
         let path = temp_storage_path();
-        let storage = Storage::initialise(path).await.expect("init storage");
+        let storage = Storage::initialise_local(path).await.expect("init storage");
 
         let household = storage
             .create_household("Test House".to_string())
@@ -530,7 +653,7 @@ mod tests {
     #[tokio::test]
     async fn anne_receives_extra_vote() {
         let path = temp_storage_path();
-        let storage = Storage::initialise(path).await.expect("init storage");
+        let storage = Storage::initialise_local(path).await.expect("init storage");
 
         let household = storage
             .create_household("Test House".to_string())
@@ -599,7 +722,7 @@ mod tests {
     #[tokio::test]
     async fn mark_watched_resets_points_but_preserves_history() {
         let path = temp_storage_path();
-        let storage = Storage::initialise(path.clone())
+        let storage = Storage::initialise_local(path.clone())
             .await
             .expect("init storage");
 
@@ -630,7 +753,6 @@ mod tests {
         assert_eq!(watched.points, 0.0);
         assert_eq!(watched.vote_history.len(), 1);
 
-        let persisted = fs::read(&path).await.expect("read persisted file");
         let persisted = fs::read(&path).await.expect("read persisted file");
         let parsed: AppData = serde_json::from_slice(&persisted).expect("parse data");
         let saved_movie = &parsed.households[0].movies[0];

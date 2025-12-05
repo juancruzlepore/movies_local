@@ -171,4 +171,3 @@ pub struct HouseholdRequest {
 pub struct AppData {
     pub households: Vec<Household>,
 }
-
