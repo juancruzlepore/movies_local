@@ -224,7 +224,8 @@ body {
   text-align: center;
 }
 
-.search-group {
+.search-group,
+.input-group {
   display: flex;
   gap: 0.5rem;
   align-items: center;

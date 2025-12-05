@@ -152,3 +152,23 @@ where
         })
         .collect())
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Household {
+    pub id: Uuid,
+    pub name: String,
+    pub users: Vec<String>,
+    pub movies: Vec<Movie>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HouseholdRequest {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AppData {
+    pub households: Vec<Household>,
+}
+

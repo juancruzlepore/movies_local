@@ -12,7 +12,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{Duration as ChronoDuration, Utc};
 use error::AppError;
-use models::{Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem, Vote, VoteRequest};
+use models::{
+    Household, HouseholdRequest, Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem, Vote,
+    VoteRequest,
+};
 use serde::Deserialize;
 use storage::{Storage, VoteOutcome, SMALL_VOTE_POINTS};
 use tokio::net::TcpListener;
@@ -78,9 +81,12 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let app = Router::new()
         .route("/health", get(health))
-        .route("/movies", get(list_movies).post(add_movie))
-        .route("/movies/:id/votes", post(vote_movie))
-        .route("/movies/:id/watch", post(mark_watched))
+        .route("/households", get(list_households).post(create_household))
+        .route("/households/:id/users", post(add_user))
+        .route("/households/:id/users/:name", axum::routing::delete(remove_user))
+        .route("/households/:household_id/movies", get(list_movies).post(add_movie))
+        .route("/households/:household_id/movies/:id/votes", post(vote_movie))
+        .route("/households/:household_id/movies/:id/watch", post(mark_watched))
         .route("/search", get(search_movies))
         .with_state(state)
         .layer(cors);
@@ -126,18 +132,57 @@ async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({"status": "ok"}))
 }
 
-async fn list_movies(State(state): State<AppState>) -> Result<Json<Vec<Movie>>, AppError> {
+async fn list_households(State(state): State<AppState>) -> Json<Vec<Household>> {
+    Json(state.storage.list_households())
+}
+
+async fn create_household(
+    State(state): State<AppState>,
+    Json(payload): Json<HouseholdRequest>,
+) -> Result<Json<Household>, AppError> {
+    if payload.name.trim().is_empty() {
+        return Err(AppError::BadRequest("name cannot be empty".into()));
+    }
+    let household = state.storage.create_household(payload.name).await?;
+    Ok(Json(household))
+}
+
+async fn add_user(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<VoteRequest>, // Reusing VoteRequest for simple {voter: name} payload
+) -> Result<Json<Household>, AppError> {
+    if payload.voter.trim().is_empty() {
+        return Err(AppError::BadRequest("voter cannot be empty".into()));
+    }
+    let household = state.storage.add_user(id, payload.voter).await?;
+    Ok(Json(household))
+}
+
+async fn remove_user(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(Uuid, String)>,
+) -> Result<Json<Household>, AppError> {
+    let household = state.storage.remove_user(id, name).await?;
+    Ok(Json(household))
+}
+
+async fn list_movies(
+    State(state): State<AppState>,
+    Path(household_id): Path<Uuid>,
+) -> Result<Json<Vec<Movie>>, AppError> {
     if let Some(mock_movies) = &state.mock_movies {
         return Ok(Json(mock_movies.clone()));
     }
 
-    let mut movies = state.storage.list();
+    let mut movies = state.storage.list(household_id)?;
     movies.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     Ok(Json(movies))
 }
 
 async fn add_movie(
     State(state): State<AppState>,
+    Path(household_id): Path<Uuid>,
     Json(mut payload): Json<NewMovie>,
 ) -> Result<(StatusCode, Json<Movie>), AppError> {
     validate_new_movie(&payload)?;
@@ -152,19 +197,19 @@ async fn add_movie(
         }
     }
 
-    let movie = state.storage.add(payload).await?;
+    let movie = state.storage.add(household_id, payload).await?;
     Ok((StatusCode::CREATED, Json(movie)))
 }
 
 async fn vote_movie(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path((household_id, id)): Path<(Uuid, Uuid)>,
     Json(payload): Json<VoteRequest>,
 ) -> Result<Json<Movie>, AppError> {
     validate_vote(&payload)?;
     let voter = payload.voter.trim().to_string();
 
-    match state.storage.vote(id, voter.clone()).await? {
+    match state.storage.vote(household_id, id, voter.clone()).await? {
         VoteOutcome::PointsAwarded(movie) => Ok(Json(movie)),
         VoteOutcome::LimitReached { limit } => {
             warn!(
@@ -182,9 +227,9 @@ async fn vote_movie(
 
 async fn mark_watched(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
+    Path((household_id, id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Movie>, AppError> {
-    match state.storage.mark_watched(id).await? {
+    match state.storage.mark_watched(household_id, id).await? {
         Some(movie) => Ok(Json(movie)),
         None => Err(AppError::NotFound("movie not found".into())),
     }

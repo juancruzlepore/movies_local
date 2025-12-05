@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use parking_lot::RwLock;
 use tokio::fs;
 
-use crate::models::{Movie, NewMovie, Vote};
+use crate::models::{AppData, Household, Movie, NewMovie, Vote};
 use chrono::{NaiveDate, Utc};
 use thiserror::Error;
 use uuid::Uuid;
@@ -27,12 +27,14 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
     #[error("data serialization error: {0}")]
     Serde(#[from] serde_json::Error),
+    #[error("not found")]
+    NotFound,
 }
 
 #[derive(Debug)]
 pub struct Storage {
     path: PathBuf,
-    inner: RwLock<Vec<Movie>>,
+    inner: RwLock<AppData>,
 }
 
 impl Storage {
@@ -41,30 +43,125 @@ impl Storage {
             fs::create_dir_all(parent).await?;
         }
 
-        let movies = if fs::try_exists(&path).await? {
+        let app_data = if fs::try_exists(&path).await? {
             let contents = fs::read(&path).await?;
             if contents.is_empty() {
-                Vec::new()
+                AppData::default()
             } else {
-                serde_json::from_slice(&contents)?
+                // Try to parse as AppData first
+                match serde_json::from_slice::<AppData>(&contents) {
+                    Ok(data) => data,
+                    Err(_) => {
+                        // Fallback: Try to parse as Vec<Movie> (legacy)
+                        let movies: Vec<Movie> = serde_json::from_slice(&contents)?;
+                        let default_household = Household {
+                            id: Uuid::new_v4(),
+                            name: "Default Household".to_string(),
+                            users: Vec::new(), // Legacy data didn't have users, so start empty or maybe infer?
+                            movies,
+                            created_at: Utc::now(),
+                        };
+                        AppData {
+                            households: vec![default_household],
+                        }
+                    }
+                }
             }
         } else {
-            Vec::new()
+            AppData::default()
         };
 
-        let normalised = movies.into_iter().map(normalise_movie).collect();
+        // Normalise movies in all households
+        let normalised_households = app_data
+            .households
+            .into_iter()
+            .map(|mut h| {
+                h.movies = h.movies.into_iter().map(normalise_movie).collect();
+                h
+            })
+            .collect();
 
         Ok(Self {
             path,
-            inner: RwLock::new(normalised),
+            inner: RwLock::new(AppData {
+                households: normalised_households,
+            }),
         })
     }
 
-    pub fn list(&self) -> Vec<Movie> {
-        self.inner.read().clone()
+    pub fn list_households(&self) -> Vec<Household> {
+        self.inner.read().households.clone()
     }
 
-    pub async fn add(&self, request: NewMovie) -> Result<Movie, StorageError> {
+    pub async fn create_household(&self, name: String) -> Result<Household, StorageError> {
+        let household = Household {
+            id: Uuid::new_v4(),
+            name,
+            users: Vec::new(),
+            movies: Vec::new(),
+            created_at: Utc::now(),
+        };
+
+        let snapshot = {
+            let mut guard = self.inner.write();
+            guard.households.push(household.clone());
+            guard.clone()
+        };
+
+        self.persist(&snapshot).await?;
+
+        Ok(household)
+    }
+
+    pub async fn add_user(&self, household_id: Uuid, name: String) -> Result<Household, StorageError> {
+        let (household, snapshot) = {
+            let mut guard = self.inner.write();
+            if let Some(household) = guard.households.iter_mut().find(|h| h.id == household_id) {
+                if !household.users.contains(&name) {
+                    household.users.push(name);
+                }
+                (Some(household.clone()), Some(guard.clone()))
+            } else {
+                (None, None)
+            }
+        };
+
+        if let Some(data) = snapshot {
+            self.persist(&data).await?;
+        }
+
+        household.ok_or(StorageError::NotFound)
+    }
+
+    pub async fn remove_user(&self, household_id: Uuid, name: String) -> Result<Household, StorageError> {
+        let (household, snapshot) = {
+            let mut guard = self.inner.write();
+            if let Some(household) = guard.households.iter_mut().find(|h| h.id == household_id) {
+                household.users.retain(|u| u != &name);
+                (Some(household.clone()), Some(guard.clone()))
+            } else {
+                (None, None)
+            }
+        };
+
+        if let Some(data) = snapshot {
+            self.persist(&data).await?;
+        }
+
+        household.ok_or(StorageError::NotFound)
+    }
+
+    pub fn list(&self, household_id: Uuid) -> Result<Vec<Movie>, StorageError> {
+        self.inner
+            .read()
+            .households
+            .iter()
+            .find(|h| h.id == household_id)
+            .map(|h| h.movies.clone())
+            .ok_or(StorageError::NotFound)
+    }
+
+    pub async fn add(&self, household_id: Uuid, request: NewMovie) -> Result<Movie, StorageError> {
         let movie = Movie {
             id: Uuid::new_v4(),
             title: request.title,
@@ -84,40 +181,56 @@ impl Storage {
 
         let snapshot = {
             let mut guard = self.inner.write();
-            guard.push(movie.clone());
-            guard.clone()
+            if let Some(household) = guard.households.iter_mut().find(|h| h.id == household_id) {
+                household.movies.push(movie.clone());
+                Some(guard.clone())
+            } else {
+                None
+            }
         };
 
-        self.persist(&snapshot).await?;
-
-        Ok(movie)
+        if let Some(data) = snapshot {
+            self.persist(&data).await?;
+            Ok(movie)
+        } else {
+            Err(StorageError::NotFound)
+        }
     }
 
-    pub async fn vote(&self, id: Uuid, voter: String) -> Result<VoteOutcome, StorageError> {
+    pub async fn vote(
+        &self,
+        household_id: Uuid,
+        id: Uuid,
+        voter: String,
+    ) -> Result<VoteOutcome, StorageError> {
         let trimmed_voter = voter.trim().to_string();
         let normalised_voter = trimmed_voter.to_lowercase();
 
         let (result, snapshot) = {
             let mut guard = self.inner.write();
-            let today = Utc::now().date_naive();
-            let votes_today = count_votes_for_day(&guard, &normalised_voter, today);
-            let limit = vote_limit_for(&normalised_voter);
+            if let Some(household) = guard.households.iter_mut().find(|h| h.id == household_id) {
+                let today = Utc::now().date_naive();
+                let votes_today = count_votes_for_day(&household.movies, &normalised_voter, today);
+                let limit = vote_limit_for(&normalised_voter);
 
-            if votes_today >= limit {
-                (VoteOutcome::LimitReached { limit }, None)
-            } else if let Some(movie) = guard.iter_mut().find(|item| item.id == id) {
-                let points_awarded = points_for_vote(votes_today, &normalised_voter);
+                if votes_today >= limit {
+                    (VoteOutcome::LimitReached { limit }, None)
+                } else if let Some(movie) = household.movies.iter_mut().find(|item| item.id == id) {
+                    let points_awarded = points_for_vote(votes_today, &normalised_voter);
 
-                movie.vote_history.push(Vote {
-                    voter: trimmed_voter.clone(),
-                    voted_at: Some(Utc::now()),
-                    points_awarded: Some(points_awarded),
-                });
-                recalculate_points(movie);
-                (
-                    VoteOutcome::PointsAwarded(movie.clone()),
-                    Some(guard.clone()),
-                )
+                    movie.vote_history.push(Vote {
+                        voter: trimmed_voter.clone(),
+                        voted_at: Some(Utc::now()),
+                        points_awarded: Some(points_awarded),
+                    });
+                    recalculate_points(movie);
+                    (
+                        VoteOutcome::PointsAwarded(movie.clone()),
+                        Some(guard.clone()),
+                    )
+                } else {
+                    (VoteOutcome::NotFound, None)
+                }
             } else {
                 (VoteOutcome::NotFound, None)
             }
@@ -130,13 +243,21 @@ impl Storage {
         Ok(result)
     }
 
-    pub async fn mark_watched(&self, id: Uuid) -> Result<Option<Movie>, StorageError> {
+    pub async fn mark_watched(
+        &self,
+        household_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<Movie>, StorageError> {
         let (movie, snapshot) = {
             let mut guard = self.inner.write();
-            if let Some(movie) = guard.iter_mut().find(|item| item.id == id) {
-                movie.last_watched_at = Some(Utc::now());
-                recalculate_points(movie);
-                (Some(movie.clone()), Some(guard.clone()))
+            if let Some(household) = guard.households.iter_mut().find(|h| h.id == household_id) {
+                if let Some(movie) = household.movies.iter_mut().find(|item| item.id == id) {
+                    movie.last_watched_at = Some(Utc::now());
+                    recalculate_points(movie);
+                    (Some(movie.clone()), Some(guard.clone()))
+                } else {
+                    (None, None)
+                }
             } else {
                 (None, None)
             }
@@ -149,7 +270,7 @@ impl Storage {
         Ok(movie)
     }
 
-    async fn persist(&self, data: &[Movie]) -> Result<(), StorageError> {
+    async fn persist(&self, data: &AppData) -> Result<(), StorageError> {
         let serialised = serde_json::to_vec_pretty(data)?;
         fs::write(&self.path, serialised).await?;
         Ok(())
@@ -254,12 +375,17 @@ mod tests {
             .await
             .expect("init storage");
 
+        let household = storage
+            .create_household("Test House".to_string())
+            .await
+            .expect("create household");
+
         let movie = storage
-            .add(sample_movie_request())
+            .add(household.id, sample_movie_request())
             .await
             .expect("add movie");
 
-        let all_movies = storage.list();
+        let all_movies = storage.list(household.id).expect("list movies");
         assert_eq!(all_movies.len(), 1);
         assert_eq!(all_movies[0].title, "The Matrix");
         assert_eq!(movie.id, all_movies[0].id);
@@ -269,11 +395,12 @@ mod tests {
         let persisted = fs::read(&path).await.expect("read persisted file");
         assert!(!persisted.is_empty());
 
-        let parsed: Vec<Movie> = serde_json::from_slice(&persisted).expect("parse persisted data");
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].title, "The Matrix");
-        assert_eq!(parsed[0].imdb_id, "tt0133093");
-        assert_eq!(parsed[0].runtime_minutes, Some(136));
+        let parsed: AppData = serde_json::from_slice(&persisted).expect("parse persisted data");
+        assert_eq!(parsed.households.len(), 1);
+        let saved_movie = &parsed.households[0].movies[0];
+        assert_eq!(saved_movie.title, "The Matrix");
+        assert_eq!(saved_movie.imdb_id, "tt0133093");
+        assert_eq!(saved_movie.runtime_minutes, Some(136));
     }
 
     #[tokio::test]
@@ -283,13 +410,18 @@ mod tests {
             .await
             .expect("init storage");
 
+        let household = storage
+            .create_household("Test House".to_string())
+            .await
+            .expect("create household");
+
         let movie = storage
-            .add(sample_movie_request())
+            .add(household.id, sample_movie_request())
             .await
             .expect("add movie");
 
         let result = storage
-            .vote(movie.id, "trinity".to_string())
+            .vote(household.id, movie.id, "trinity".to_string())
             .await
             .expect("vote movie");
 
@@ -307,15 +439,17 @@ mod tests {
         assert_eq!(updated.runtime_minutes, Some(136));
 
         let persisted = fs::read(&path).await.expect("read persisted file");
-        let parsed: Vec<Movie> = serde_json::from_slice(&persisted).expect("parse persisted data");
-        assert_eq!(parsed[0].points, BIG_VOTE_POINTS);
-        assert_eq!(parsed[0].vote_history.len(), 1);
-        assert_eq!(parsed[0].vote_history[0].voter, "trinity");
+        let persisted = fs::read(&path).await.expect("read persisted file");
+        let parsed: AppData = serde_json::from_slice(&persisted).expect("parse persisted data");
+        let saved_movie = &parsed.households[0].movies[0];
+        assert_eq!(saved_movie.points, BIG_VOTE_POINTS);
+        assert_eq!(saved_movie.vote_history.len(), 1);
+        assert_eq!(saved_movie.vote_history[0].voter, "trinity");
         assert_eq!(
-            parsed[0].vote_history[0].points_awarded,
+            saved_movie.vote_history[0].points_awarded,
             Some(BIG_VOTE_POINTS)
         );
-        assert_eq!(parsed[0].runtime_minutes, Some(136));
+        assert_eq!(saved_movie.runtime_minutes, Some(136));
     }
 
     #[tokio::test]
@@ -323,30 +457,38 @@ mod tests {
         let path = temp_storage_path();
         let storage = Storage::initialise(path).await.expect("init storage");
 
+        let household = storage
+            .create_household("Test House".to_string())
+            .await
+            .expect("create household");
+
         let primary = storage
-            .add(sample_movie_request())
+            .add(household.id, sample_movie_request())
             .await
             .expect("add movie");
 
         let mut sequel_request = sample_movie_request();
         sequel_request.title = "The Matrix Reloaded".to_string();
         sequel_request.imdb_id = "tt0234215".to_string();
-        let sequel = storage.add(sequel_request).await.expect("add sequel");
+        let sequel = storage
+            .add(household.id, sequel_request)
+            .await
+            .expect("add sequel");
 
         let first = storage
-            .vote(primary.id, "Trinity".to_string())
+            .vote(household.id, primary.id, "Trinity".to_string())
             .await
             .expect("first vote");
         assert!(matches!(first, VoteOutcome::PointsAwarded(_)));
 
         let second = storage
-            .vote(sequel.id, "Trinity".to_string())
+            .vote(household.id, sequel.id, "Trinity".to_string())
             .await
             .expect("second vote");
         assert!(matches!(second, VoteOutcome::PointsAwarded(_)));
 
         let third = storage
-            .vote(primary.id, "Trinity".to_string())
+            .vote(household.id, primary.id, "Trinity".to_string())
             .await
             .expect("third vote");
         match third {
@@ -354,7 +496,7 @@ mod tests {
             other => panic!("expected limit reached, got {:?}", other),
         }
 
-        let movies = storage.list();
+        let movies = storage.list(household.id).expect("list movies");
         let primary_entry = movies
             .iter()
             .find(|m| m.id == primary.id)
@@ -390,30 +532,38 @@ mod tests {
         let path = temp_storage_path();
         let storage = Storage::initialise(path).await.expect("init storage");
 
+        let household = storage
+            .create_household("Test House".to_string())
+            .await
+            .expect("create household");
+
         let primary = storage
-            .add(sample_movie_request())
+            .add(household.id, sample_movie_request())
             .await
             .expect("add movie");
 
         let mut sequel_request = sample_movie_request();
         sequel_request.title = "The Matrix Reloaded".to_string();
         sequel_request.imdb_id = "tt0234215".to_string();
-        let sequel = storage.add(sequel_request).await.expect("add sequel");
+        let sequel = storage
+            .add(household.id, sequel_request)
+            .await
+            .expect("add sequel");
 
         let first = storage
-            .vote(primary.id, "Anne".to_string())
+            .vote(household.id, primary.id, "Anne".to_string())
             .await
             .expect("first vote");
         assert!(matches!(first, VoteOutcome::PointsAwarded(_)));
 
         let second = storage
-            .vote(sequel.id, "Anne".to_string())
+            .vote(household.id, sequel.id, "Anne".to_string())
             .await
             .expect("second vote");
         assert!(matches!(second, VoteOutcome::PointsAwarded(_)));
 
         let third = storage
-            .vote(primary.id, "Anne".to_string())
+            .vote(household.id, primary.id, "Anne".to_string())
             .await
             .expect("third vote");
 
@@ -436,7 +586,7 @@ mod tests {
         );
 
         let fourth = storage
-            .vote(sequel.id, "Anne".to_string())
+            .vote(household.id, sequel.id, "Anne".to_string())
             .await
             .expect("fourth vote");
 
@@ -453,20 +603,25 @@ mod tests {
             .await
             .expect("init storage");
 
+        let household = storage
+            .create_household("Test House".to_string())
+            .await
+            .expect("create household");
+
         let movie = storage
-            .add(sample_movie_request())
+            .add(household.id, sample_movie_request())
             .await
             .expect("add movie");
 
         // Cast an initial vote
         storage
-            .vote(movie.id, "neo".to_string())
+            .vote(household.id, movie.id, "neo".to_string())
             .await
             .expect("first vote");
 
         // Mark as watched
         let watched = storage
-            .mark_watched(movie.id)
+            .mark_watched(household.id, movie.id)
             .await
             .expect("mark watched")
             .expect("movie exists");
@@ -476,14 +631,16 @@ mod tests {
         assert_eq!(watched.vote_history.len(), 1);
 
         let persisted = fs::read(&path).await.expect("read persisted file");
-        let parsed: Vec<Movie> = serde_json::from_slice(&persisted).expect("parse data");
-        assert_eq!(parsed[0].points, 0.0);
-        assert!(parsed[0].last_watched_at.is_some());
-        assert_eq!(parsed[0].vote_history.len(), 1);
+        let persisted = fs::read(&path).await.expect("read persisted file");
+        let parsed: AppData = serde_json::from_slice(&persisted).expect("parse data");
+        let saved_movie = &parsed.households[0].movies[0];
+        assert_eq!(saved_movie.points, 0.0);
+        assert!(saved_movie.last_watched_at.is_some());
+        assert_eq!(saved_movie.vote_history.len(), 1);
 
         // Votes after watch are counted again
         let follow_up = storage
-            .vote(movie.id, "trinity".to_string())
+            .vote(household.id, movie.id, "trinity".to_string())
             .await
             .expect("second vote");
 

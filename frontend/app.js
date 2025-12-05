@@ -7,8 +7,8 @@ const BIG_VOTE_POINTS = 1.5;
 const SMALL_VOTE_POINTS = 1;
 const ANNE_BONUS_VOTE_POINTS = 0.5;
 
-const displayNameInput = document.querySelector('#display-name');
-const displayNameForm = document.querySelector('#display-name-form');
+// const displayNameInput = document.querySelector('#display-name'); // Removed
+// const displayNameForm = document.querySelector('#display-name-form'); // Removed
 const landingScreen = document.querySelector('#landing-screen');
 const changeNameButton = document.querySelector('#change-name');
 const appMain = document.querySelector('.app-main');
@@ -28,10 +28,23 @@ const tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
 const resultTemplate = document.querySelector('#result-item-template');
 const movieTemplate = document.querySelector('#movie-item-template');
 
+const householdScreen = document.querySelector('#household-screen');
+const householdList = document.querySelector('#household-list');
+const createHouseholdForm = document.querySelector('#create-household-form');
+const newHouseholdNameInput = document.querySelector('#new-household-name');
+
+const userList = document.querySelector('#user-list');
+const addUserForm = document.querySelector('#add-user-form');
+const newUserNameInput = document.querySelector('#new-user-name');
+const backToHouseholdsButton = document.querySelector('#back-to-households');
+
 const STORAGE_KEY = 'movies-local-display-name';
+const HOUSEHOLD_STORAGE_KEY = 'movies-local-household-id';
 
 let latestMovies = [];
 let activeMovieFilter = '';
+let currentHouseholdId = null;
+let allHouseholds = [];
 
 function resolveApiBase() {
   const candidate =
@@ -113,7 +126,6 @@ function updateChangeNameButtonLabel(name) {
   if (!changeNameButton) return;
   const displayName =
     (typeof name === 'string' && name.trim()) ||
-    (displayNameInput && displayNameInput.value.trim()) ||
     getDisplayName();
 
   if (!displayName) return;
@@ -121,25 +133,24 @@ function updateChangeNameButtonLabel(name) {
 }
 
 function hydrateDisplayName() {
-  const savedName = getDisplayName();
-  if (savedName) {
-    displayNameInput.value = savedName;
-  }
+  // No-op: input removed
 }
 
 function showLanding(options = {}) {
   const { focusInput = true, selectInput = false, prefill = true } = options;
 
-  if (prefill && displayNameInput) {
-    const savedName = getDisplayName();
-    if (savedName && savedName !== displayNameInput.value) {
-      displayNameInput.value = savedName;
-    }
+  if (prefill) {
+    // No-op: input removed
   }
 
   if (landingScreen) {
     landingScreen.hidden = false;
     landingScreen.setAttribute('aria-hidden', 'false');
+  }
+
+  if (householdScreen) {
+    householdScreen.hidden = true;
+    householdScreen.setAttribute('aria-hidden', 'true');
   }
 
   if (appMain) {
@@ -154,20 +165,18 @@ function showLanding(options = {}) {
     document.body.classList.add('showing-landing');
   }
 
-  if (displayNameInput && focusInput) {
-    requestAnimationFrame(() => {
-      displayNameInput.focus();
-      if (selectInput) {
-        displayNameInput.select();
-      }
-    });
-  }
+  // if (displayNameInput && focusInput) { ... } // Removed
 }
 
 function hideLanding() {
   if (landingScreen) {
     landingScreen.hidden = true;
     landingScreen.setAttribute('aria-hidden', 'true');
+  }
+
+  if (householdScreen) {
+    householdScreen.hidden = true;
+    householdScreen.setAttribute('aria-hidden', 'true');
   }
 
   if (appMain) {
@@ -184,7 +193,7 @@ function hideLanding() {
 }
 
 function requireDisplayName(message) {
-  const name = displayNameInput.value.trim();
+  const name = getDisplayName();
   if (name) return name;
 
   if (message) {
@@ -200,7 +209,7 @@ function completeNameSetup({ message } = {}) {
   if (message) {
     setFeedback(message);
   }
-  updateDailyVoteCount(latestMovies);
+  fetchMovies();
 }
 
 async function fetchMovies(options = {}) {
@@ -211,7 +220,10 @@ async function fetchMovies(options = {}) {
   }
 
   try {
-    const response = await fetch(`${API_BASE}/movies`);
+    if (!currentHouseholdId) {
+      throw new Error("No household selected");
+    }
+    const response = await fetch(`${API_BASE}/households/${currentHouseholdId}/movies`);
     if (!response.ok) {
       throw new Error(`Server responded with ${response.status}`);
     }
@@ -416,7 +428,7 @@ function buildMovieElement(movie) {
   const pointsLabel = element.querySelector('.movie-points');
   renderPoints(pointsLabel, getPoints(movie));
 
-  const voter = displayNameInput.value.trim();
+  const voter = getDisplayName();
   const votesToday = voter ? countVotesForToday(latestMovies, voter) : 0;
   const { label, disabled, tooltip, variant } = describeNextVote(votesToday, voter);
   voteButton.textContent = label;
@@ -546,7 +558,10 @@ async function addMovie(result, button) {
   };
 
   try {
-    const response = await fetch(`${API_BASE}/movies`, {
+    if (!currentHouseholdId) {
+      throw new Error("No household selected");
+    }
+    const response = await fetch(`${API_BASE}/households/${currentHouseholdId}/movies`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -621,7 +636,7 @@ function formatRuntime(value) {
 function updateDailyVoteCount(movies = []) {
   if (!dailyVoteCounter) return;
 
-  const voter = displayNameInput.value.trim();
+  const voter = getDisplayName();
   if (!voter) {
     dailyVoteCounter.textContent = 'Save your name to track your votes today.';
     return;
@@ -707,7 +722,7 @@ function getDailyVoteLimit(name = '') {
 async function voteForMovie(movieId, button, pointsLabel) {
   if (!movieId) return;
 
-  const draftName = displayNameInput.value.trim();
+  const draftName = getDisplayName();
   const initialVotesToday = draftName ? countVotesForToday(latestMovies, draftName) : 0;
 
   const voter = requireDisplayName('Save your name before voting.');
@@ -736,7 +751,10 @@ async function voteForMovie(movieId, button, pointsLabel) {
   setFeedback('Recording your vote…');
 
   try {
-    const response = await fetch(`${API_BASE}/movies/${movieId}/votes`, {
+    if (!currentHouseholdId) {
+      throw new Error("No household selected");
+    }
+    const response = await fetch(`${API_BASE}/households/${currentHouseholdId}/movies/${movieId}/votes`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -780,8 +798,14 @@ async function markMovieWatched(movieId, button) {
   setFeedback('Resetting points…');
 
   try {
-    const response = await fetch(`${API_BASE}/movies/${movieId}/watch`, {
+    if (!currentHouseholdId) {
+      throw new Error("No household selected");
+    }
+    const response = await fetch(`${API_BASE}/households/${currentHouseholdId}/movies/${movieId}/watch`, {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
     });
 
     if (!response.ok) {
@@ -931,26 +955,300 @@ async function safeJson(response) {
   }
 }
 
-if (displayNameForm) {
-  displayNameForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    if (!displayNameForm.reportValidity()) return;
+// Household Management
 
-    const name = displayNameInput.value.trim();
-    if (!name) {
-      displayNameInput.focus();
-      return;
-    }
-
-    setDisplayName(name);
-    updateChangeNameButtonLabel(name);
-    completeNameSetup({ message: 'Name saved!' });
-  });
+function getStoredHouseholdId() {
+  return localStorage.getItem(HOUSEHOLD_STORAGE_KEY);
 }
 
-displayNameInput.addEventListener('input', () => {
-  updateDailyVoteCount(latestMovies);
-});
+function setStoredHouseholdId(id) {
+  if (id) {
+    localStorage.setItem(HOUSEHOLD_STORAGE_KEY, id);
+  } else {
+    localStorage.removeItem(HOUSEHOLD_STORAGE_KEY);
+  }
+}
+
+async function initApp() {
+  setupTabs();
+
+  // if (displayNameForm) { ... } // Removed
+
+  if (addUserForm) {
+    addUserForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = newUserNameInput.value.trim();
+      if (name) {
+        await addUser(name);
+      }
+    });
+  }
+
+  if (backToHouseholdsButton) {
+    backToHouseholdsButton.addEventListener('click', () => {
+      setStoredHouseholdId(null);
+      currentHouseholdId = null;
+      showHouseholdSelection();
+    });
+  }
+
+  if (changeNameButton) {
+    changeNameButton.addEventListener('click', () => {
+      showLanding({ focusInput: true, selectInput: true, prefill: true });
+    });
+  }
+
+  if (createHouseholdForm) {
+    createHouseholdForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = newHouseholdNameInput.value.trim();
+      if (name) {
+        await createHousehold(name);
+      }
+    });
+  }
+
+  // Always fetch households first to populate state
+  await fetchHouseholds();
+
+  const storedId = getStoredHouseholdId();
+  if (storedId) {
+    const household = allHouseholds.find(h => h.id === storedId);
+    if (household) {
+      currentHouseholdId = storedId;
+      renderUsers(household);
+
+      hydrateDisplayName();
+      updateChangeNameButtonLabel();
+
+      if (getDisplayName()) {
+        hideLanding();
+        fetchMovies();
+      } else {
+        showLanding();
+      }
+    } else {
+      // Stored ID is invalid or household deleted
+      setStoredHouseholdId(null);
+      showHouseholdSelection();
+    }
+  } else {
+    showHouseholdSelection();
+  }
+}
+
+function showHouseholdSelection() {
+  if (householdScreen) {
+    householdScreen.hidden = false;
+    householdScreen.setAttribute('aria-hidden', 'false');
+  }
+  if (landingScreen) {
+    landingScreen.hidden = true;
+    landingScreen.setAttribute('aria-hidden', 'true');
+  }
+  if (appMain) {
+    appMain.hidden = true;
+  }
+  fetchHouseholds();
+}
+
+async function fetchHouseholds() {
+  try {
+    const response = await fetch(`${API_BASE}/households`);
+    if (!response.ok) throw new Error('Failed to fetch households');
+    const households = await response.json();
+    allHouseholds = households;
+    renderHouseholds(households);
+  } catch (error) {
+    console.error(error);
+    if (householdList) {
+      householdList.textContent = 'Unable to load households.';
+    }
+  }
+}
+
+function renderHouseholds(households) {
+  if (!householdList) return;
+  householdList.innerHTML = '';
+
+  if (households.length === 0) {
+    const p = document.createElement('p');
+    p.textContent = "No households found. Create one to get started.";
+    householdList.appendChild(p);
+    return;
+  }
+
+  const ul = document.createElement('ul');
+  ul.className = 'card-list';
+
+  households.forEach(h => {
+    const li = document.createElement('li');
+    li.className = 'result-card'; // Reuse result card styling
+
+    const div = document.createElement('div');
+    div.className = 'result-details';
+    const h3 = document.createElement('h3');
+    h3.className = 'result-title';
+    h3.textContent = h.name;
+    div.appendChild(h3);
+
+    const btn = document.createElement('button');
+    btn.className = 'primary';
+    btn.textContent = 'Join';
+    btn.addEventListener('click', () => selectHousehold(h.id));
+
+    li.appendChild(div);
+    li.appendChild(btn);
+    ul.appendChild(li);
+  });
+
+  householdList.appendChild(ul);
+}
+
+async function createHousehold(name) {
+  try {
+    const response = await fetch(`${API_BASE}/households`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+
+    if (!response.ok) throw new Error('Failed to create household');
+
+    const household = await response.json();
+    allHouseholds.push(household);
+    selectHousehold(household.id);
+  } catch (error) {
+    console.error(error);
+    alert('Failed to create household');
+  }
+}
+
+function selectHousehold(id) {
+  currentHouseholdId = id;
+  setStoredHouseholdId(id);
+
+  const household = allHouseholds.find(h => h.id === id);
+  if (household) {
+    renderUsers(household);
+    showLanding(); // Show user selection
+  } else {
+    // Should not happen if data is consistent, but maybe fetch again?
+    fetchHouseholds().then(() => {
+      const h = allHouseholds.find(h => h.id === id);
+      if (h) {
+        renderUsers(h);
+        showLanding();
+      } else {
+        showHouseholdSelection();
+      }
+    });
+  }
+}
+
+function renderUsers(household) {
+  if (!userList) return;
+  userList.innerHTML = '';
+
+  if (!household.users || household.users.length === 0) {
+    const p = document.createElement('p');
+    p.textContent = "No users yet. Add yourself!";
+    userList.appendChild(p);
+    return;
+  }
+
+  const ul = document.createElement('ul');
+  ul.className = 'card-list';
+
+  household.users.forEach(user => {
+    const li = document.createElement('li');
+    li.className = 'result-card';
+
+    const div = document.createElement('div');
+    div.className = 'result-details';
+    const h3 = document.createElement('h3');
+    h3.className = 'result-title';
+    h3.textContent = user;
+    div.appendChild(h3);
+
+    const actions = document.createElement('div');
+    actions.style.display = 'flex';
+    actions.style.gap = '0.5rem';
+
+    const selectBtn = document.createElement('button');
+    selectBtn.className = 'primary';
+    selectBtn.textContent = 'Select';
+    selectBtn.addEventListener('click', () => selectUser(user));
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'secondary';
+    deleteBtn.textContent = '×';
+    deleteBtn.title = 'Remove user';
+    deleteBtn.addEventListener('click', () => removeUser(household.id, user));
+
+    actions.appendChild(selectBtn);
+    actions.appendChild(deleteBtn);
+
+    li.appendChild(div);
+    li.appendChild(actions);
+    ul.appendChild(li);
+  });
+
+  userList.appendChild(ul);
+}
+
+async function addUser(name) {
+  if (!currentHouseholdId) return;
+  try {
+    const response = await fetch(`${API_BASE}/households/${currentHouseholdId}/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ voter: name })
+    });
+    if (!response.ok) throw new Error('Failed to add user');
+    const updatedHousehold = await response.json();
+
+    // Update local state
+    const index = allHouseholds.findIndex(h => h.id === updatedHousehold.id);
+    if (index !== -1) allHouseholds[index] = updatedHousehold;
+
+    renderUsers(updatedHousehold);
+    newUserNameInput.value = '';
+  } catch (error) {
+    console.error(error);
+    alert('Failed to add user');
+  }
+}
+
+async function removeUser(householdId, name) {
+  if (!confirm(`Remove ${name} from this household?`)) return;
+  try {
+    const response = await fetch(`${API_BASE}/households/${householdId}/users/${name}`, {
+      method: 'DELETE'
+    });
+    if (!response.ok) throw new Error('Failed to remove user');
+    const updatedHousehold = await response.json();
+
+    const index = allHouseholds.findIndex(h => h.id === updatedHousehold.id);
+    if (index !== -1) allHouseholds[index] = updatedHousehold;
+
+    renderUsers(updatedHousehold);
+  } catch (error) {
+    console.error(error);
+    alert('Failed to remove user');
+  }
+}
+
+function selectUser(name) {
+  setDisplayName(name);
+  updateChangeNameButtonLabel(name);
+  completeNameSetup({ message: `Welcome back, ${name}!` });
+}
+
+// Start
+initApp();
+
+// displayNameInput.addEventListener('input', ...); // Removed
 
 searchForm.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -975,26 +1273,3 @@ if (moviesFilterInput) {
   });
 }
 
-setupTabs();
-
-hydrateDisplayName();
-updateChangeNameButtonLabel();
-
-if (displayNameInput.value.trim()) {
-  completeNameSetup({ message: 'Ready when you are!' });
-} else {
-  showLanding({ focusInput: false });
-  setFeedback('Enter your name to get started.');
-  if (displayNameInput) {
-    requestAnimationFrame(() => displayNameInput.focus());
-  }
-}
-
-fetchMovies();
-updateDailyVoteCount(latestMovies);
-
-if (changeNameButton) {
-  changeNameButton.addEventListener('click', () => {
-    showLanding({ selectInput: true });
-  });
-}
