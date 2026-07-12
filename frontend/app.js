@@ -1,4 +1,7 @@
 const API_STORAGE_KEY = 'movies-local-api-base';
+const DEBUG_STORAGE_KEY = 'movies-local-debug';
+let debugPanel = null;
+let debugEnabled = resolveDebugFlag();
 const API_BASE = resolveApiBase();
 const DEFAULT_DAILY_VOTE_LIMIT = 2;
 const ANNE_DAILY_VOTE_LIMIT = 3;
@@ -6,9 +9,13 @@ const ANNE_NAME = 'anne';
 const BIG_VOTE_POINTS = 1.5;
 const SMALL_VOTE_POINTS = 1;
 const ANNE_BONUS_VOTE_POINTS = 0.5;
+const LOCAL_PREVIEW_POSTERS = {
+  tt6710474: 'assets/poster-multiverse.png',
+  tt9362722: 'assets/poster-animated-city.png',
+  tt7605052: 'assets/poster-holiday-baking.png',
+};
 
-// const displayNameInput = document.querySelector('#display-name'); // Removed
-// const displayNameForm = document.querySelector('#display-name-form'); // Removed
+const displayNameInput = document.querySelector('#display-name'); // Optional legacy input
 const landingScreen = document.querySelector('#landing-screen');
 const changeNameButton = document.querySelector('#change-name');
 const appMain = document.querySelector('.app-main');
@@ -37,24 +44,126 @@ const userList = document.querySelector('#user-list');
 const addUserForm = document.querySelector('#add-user-form');
 const newUserNameInput = document.querySelector('#new-user-name');
 const backToHouseholdsButton = document.querySelector('#back-to-households');
+const selectedHouseholdName = document.querySelector('#selected-household-name');
+const activeUserLabel = document.querySelector('#active-user-label');
+const activeHouseholdLabel = document.querySelector('#active-household-label');
 
 const STORAGE_KEY = 'movies-local-display-name';
 const HOUSEHOLD_STORAGE_KEY = 'movies-local-household-id';
+const SESSION_STORAGE_KEY = 'movies-local-selection';
+
+const VIEW_HASHES = {
+  households: '#households',
+  people: '#people',
+  app: '#watchlist',
+};
 
 let latestMovies = [];
 let activeMovieFilter = '';
 let currentHouseholdId = null;
 let allHouseholds = [];
 
+function resolveDebugFlag() {
+  const searchParams = new URLSearchParams(window.location.search);
+  const hashParams = new URLSearchParams(window.location.hash.slice(1));
+  const override = searchParams.get('debug') || hashParams.get('debug');
+
+  if (override) {
+    const enabled = override === '1' || override.toLowerCase() === 'true';
+    setStoredDebugFlag(enabled);
+    return enabled;
+  }
+
+  try {
+    return localStorage.getItem(DEBUG_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function setStoredDebugFlag(enabled) {
+  try {
+    if (enabled) {
+      localStorage.setItem(DEBUG_STORAGE_KEY, '1');
+    } else {
+      localStorage.removeItem(DEBUG_STORAGE_KEY);
+    }
+  } catch {
+    // ignore storage errors (private browsing, etc)
+  }
+}
+
+function ensureDebugPanel() {
+  if (!debugEnabled || debugPanel) return;
+
+  debugPanel = document.createElement('aside');
+  debugPanel.id = 'movies-local-debug';
+  debugPanel.style.position = 'fixed';
+  debugPanel.style.bottom = '0';
+  debugPanel.style.right = '0';
+  debugPanel.style.maxWidth = '360px';
+  debugPanel.style.maxHeight = '40vh';
+  debugPanel.style.overflow = 'auto';
+  debugPanel.style.fontSize = '12px';
+  debugPanel.style.lineHeight = '1.4';
+  debugPanel.style.background = 'rgba(15, 23, 42, 0.85)';
+  debugPanel.style.color = '#e2e8f0';
+  debugPanel.style.padding = '0.75rem';
+  debugPanel.style.borderTopLeftRadius = '10px';
+  debugPanel.style.boxShadow = '0 4px 12px rgba(0,0,0,0.35)';
+  debugPanel.style.zIndex = '9999';
+
+  const title = document.createElement('div');
+  title.textContent = 'movies-local debug';
+  title.style.fontWeight = '700';
+  title.style.marginBottom = '0.35rem';
+  debugPanel.appendChild(title);
+
+  document.body.appendChild(debugPanel);
+}
+
+function logDebug(message, extra) {
+  if (!debugEnabled) return;
+  console.info('[movies-local][debug]', message, extra || '');
+  ensureDebugPanel();
+  if (!debugPanel) return;
+  const entry = document.createElement('div');
+  entry.style.marginBottom = '0.35rem';
+  entry.textContent = `${new Date().toISOString()} ${message}${extra ? ` ${JSON.stringify(extra)}` : ''
+    }`;
+  debugPanel.appendChild(entry);
+  debugPanel.scrollTop = debugPanel.scrollHeight;
+}
+
+function logError(message, extra) {
+  console.error('[movies-local][error]', message, extra || '');
+  if (!debugEnabled) return;
+  ensureDebugPanel();
+  if (!debugPanel) return;
+  const entry = document.createElement('div');
+  entry.style.marginBottom = '0.35rem';
+  entry.style.color = '#f87171';
+  entry.textContent = `${new Date().toISOString()} ${message}${extra ? ` ${JSON.stringify(extra)}` : ''
+    }`;
+  debugPanel.appendChild(entry);
+  debugPanel.scrollTop = debugPanel.scrollHeight;
+}
+
 function resolveApiBase() {
+  const hostname = window.location.hostname;
+  const protocol = window.location.protocol === 'https:' ? 'https' : 'http';
+  const override =
+    window.API_BASE_URL || getStoredApiBase() || getUrlOverride();
+  const defaultCloudApi = 'https://zf23h8tk44.execute-api.eu-west-2.amazonaws.com';
+
   const candidate =
-    window.API_BASE_URL ||
-    getStoredApiBase() ||
-    getUrlOverride() ||
-    inferFromLocation() ||
-    'http://localhost:8080';
+    override ||
+    (isLocalHost(hostname)
+      ? `${protocol}://${normaliseHostname(hostname)}:8080`
+      : defaultCloudApi);
 
   console.info('[movies-local] API base:', candidate);
+  logDebug('API base resolved', { candidate, hostname, protocol, override });
   return candidate.replace(/\/+$/, '');
 }
 
@@ -88,7 +197,7 @@ function getUrlOverride() {
 }
 
 function inferFromLocation() {
-  const { protocol, hostname } = window.location;
+  const { protocol, hostname, port } = window.location;
 
   if (!hostname || hostname === '0.0.0.0') {
     return null;
@@ -97,8 +206,36 @@ function inferFromLocation() {
   const url = new URL('http://placeholder');
   url.protocol = protocol === 'https:' ? 'https:' : 'http:';
   url.hostname = hostname;
-  url.port = '8080';
+  if (port) {
+    url.port = port;
+  } else {
+    url.port = '';
+  }
   return url.origin;
+}
+
+function isLocalHost(hostname) {
+  if (!hostname || hostname === '0.0.0.0') return true;
+
+  const privateRange =
+    /^10\./.test(hostname) ||
+    /^192\.168\./.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname) ||
+    hostname.endsWith('.local');
+
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    privateRange
+  );
+}
+
+function normaliseHostname(hostname) {
+  if (!hostname || hostname === '0.0.0.0') return 'localhost';
+  return hostname.includes(':') && !hostname.startsWith('[')
+    ? `[${hostname}]`
+    : hostname;
 }
 
 window.moviesLocal = window.moviesLocal || {};
@@ -114,12 +251,42 @@ window.moviesLocal.setApiBase = function setApiBase(nextBase) {
   window.location.reload();
 };
 
+window.moviesLocal.enableDebug = function enableDebug() {
+  debugEnabled = true;
+  setStoredDebugFlag(true);
+  ensureDebugPanel();
+  logDebug('Debug enabled via moviesLocal.enableDebug()');
+};
+
+window.moviesLocal.disableDebug = function disableDebug() {
+  debugEnabled = false;
+  setStoredDebugFlag(false);
+  if (debugPanel && debugPanel.parentNode) {
+    debugPanel.parentNode.removeChild(debugPanel);
+  }
+  debugPanel = null;
+  console.info('[movies-local] Debug disabled');
+};
+
 function getDisplayName() {
-  return localStorage.getItem(STORAGE_KEY) || '';
+  const session = getRememberedSelection();
+  if (session.householdId === currentHouseholdId) {
+    return session.userName || '';
+  }
+  return '';
 }
 
 function setDisplayName(name) {
-  localStorage.setItem(STORAGE_KEY, name);
+  const cleanName = typeof name === 'string' ? name.trim() : '';
+  if (cleanName) {
+    localStorage.setItem(STORAGE_KEY, cleanName);
+  } else {
+    localStorage.removeItem(STORAGE_KEY);
+  }
+  setRememberedSelection({
+    householdId: currentHouseholdId,
+    userName: cleanName,
+  });
 }
 
 function updateChangeNameButtonLabel(name) {
@@ -129,7 +296,54 @@ function updateChangeNameButtonLabel(name) {
     getDisplayName();
 
   if (!displayName) return;
-  changeNameButton.textContent = displayName;
+  const household = allHouseholds.find((item) => item.id === currentHouseholdId);
+  if (activeUserLabel) activeUserLabel.textContent = displayName;
+  if (activeHouseholdLabel) {
+    activeHouseholdLabel.textContent = household?.name || 'Switch person';
+  }
+}
+
+function getRememberedSelection() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) || '{}');
+    return {
+      householdId: typeof parsed.householdId === 'string' ? parsed.householdId : '',
+      userName: typeof parsed.userName === 'string' ? parsed.userName : '',
+    };
+  } catch {
+    return { householdId: '', userName: '' };
+  }
+}
+
+function setRememberedSelection(selection) {
+  try {
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
+      householdId: selection.householdId || '',
+      userName: selection.userName || '',
+    }));
+  } catch {
+    // Local storage can be unavailable in private browsing modes.
+  }
+}
+
+function updateSelectedHouseholdCopy() {
+  const household = allHouseholds.find((item) => item.id === currentHouseholdId);
+  if (selectedHouseholdName) {
+    selectedHouseholdName.textContent = household?.name || 'this household';
+  }
+  updateChangeNameButtonLabel();
+}
+
+function syncViewHistory(view, mode = 'push') {
+  if (mode === 'none') return;
+  const hash = VIEW_HASHES[view];
+  if (!hash) return;
+  const state = { moviesLocalView: view };
+  if (mode === 'replace') {
+    window.history.replaceState(state, '', hash);
+  } else if (window.location.hash !== hash) {
+    window.history.pushState(state, '', hash);
+  }
 }
 
 function hydrateDisplayName() {
@@ -137,7 +351,12 @@ function hydrateDisplayName() {
 }
 
 function showLanding(options = {}) {
-  const { focusInput = true, selectInput = false, prefill = true } = options;
+  const {
+    focusInput = true,
+    selectInput = false,
+    prefill = true,
+    historyMode = 'push',
+  } = options;
 
   if (prefill) {
     // No-op: input removed
@@ -165,10 +384,14 @@ function showLanding(options = {}) {
     document.body.classList.add('showing-landing');
   }
 
+  updateSelectedHouseholdCopy();
+  syncViewHistory('people', historyMode);
+
   // if (displayNameInput && focusInput) { ... } // Removed
 }
 
-function hideLanding() {
+function hideLanding(options = {}) {
+  const { historyMode = 'push' } = options;
   if (landingScreen) {
     landingScreen.hidden = true;
     landingScreen.setAttribute('aria-hidden', 'true');
@@ -190,6 +413,9 @@ function hideLanding() {
   if (document.body) {
     document.body.classList.remove('showing-landing');
   }
+
+  updateSelectedHouseholdCopy();
+  syncViewHistory('app', historyMode);
 }
 
 function requireDisplayName(message) {
@@ -223,19 +449,21 @@ async function fetchMovies(options = {}) {
     if (!currentHouseholdId) {
       throw new Error("No household selected");
     }
+    logDebug('Fetching movies', { householdId: currentHouseholdId });
     const response = await fetch(`${API_BASE}/households/${currentHouseholdId}/movies`);
+    const bodyText = await response.text();
+    logDebug('Movies response', { status: response.status, bodyPreview: bodyText.slice(0, 200) });
     if (!response.ok) {
       throw new Error(`Server responded with ${response.status}`);
     }
-    const data = await response.json();
-    latestMovies = Array.isArray(data) ? data : [];
+    latestMovies = parseArrayPayload(bodyText, 'movies');
     renderMovies(latestMovies);
     updateDailyVoteCount(latestMovies);
     if (showLoading) {
       setFeedback('');
     }
   } catch (error) {
-    console.error(error);
+    logError('fetch movies failed', { message: error.message });
     setFeedback('Unable to load shared list. Check the server.');
     if (dailyVoteCounter) {
       dailyVoteCounter.textContent = 'Unable to load vote history right now.';
@@ -407,14 +635,23 @@ function buildMovieElement(movie) {
   element.querySelector('.movie-meta').textContent = metaParts.join(' • ');
 
   const posterContainer = element.querySelector('.movie-poster');
-  const posterUrl = normalisePoster(movie.poster_url);
-  if (posterUrl) {
+  const posterUrls = resolveMoviePosterCandidates(movie);
+  if (posterUrls.length) {
     posterContainer.innerHTML = '';
     const img = document.createElement('img');
-    img.src = posterUrl;
     img.alt = `${movie.title} Poster`;
     img.loading = 'lazy';
     img.decoding = 'async';
+    let posterIndex = 0;
+    img.addEventListener('error', () => {
+      posterIndex += 1;
+      if (posterIndex < posterUrls.length) {
+        img.src = posterUrls[posterIndex];
+        return;
+      }
+      showPosterPlaceholder(posterContainer);
+    });
+    img.src = posterUrls[posterIndex];
     posterContainer.appendChild(img);
     posterContainer.removeAttribute('aria-hidden');
     posterContainer.classList.remove('movie-poster--placeholder');
@@ -468,20 +705,25 @@ async function searchMovies(query, mediaType) {
     const params = new URLSearchParams({ query });
     if (mediaType) params.set('media_type', mediaType);
 
-    const response = await fetch(`${API_BASE}/search?${params.toString()}`);
+    const url = `${API_BASE}/search?${params.toString()}`;
+    logDebug('Searching movies', { url });
+    const response = await fetch(url);
+    const bodyText = await response.text();
+    logDebug('Search response', { status: response.status, bodyPreview: bodyText.slice(0, 200) });
     if (!response.ok) {
       throw new Error(`Search failed with ${response.status}`);
     }
 
-    const payload = await response.json();
-    renderSearchResults(payload.results || []);
-    if (payload.results && !payload.results.length) {
+    const payload = parseSearchPayload(bodyText);
+    const results = payload?.results || [];
+    renderSearchResults(results);
+    if (!results.length) {
       setFeedback('No matches found. Try a different title.');
     } else {
       setFeedback('');
     }
   } catch (error) {
-    console.error(error);
+    logError('search failed', { message: error.message });
     setFeedback('Search failed. Make sure the backend can reach OMDb.');
   }
 }
@@ -602,6 +844,41 @@ function buildResultSubtitle(result) {
 function normalisePoster(value) {
   if (!value || value === 'N/A') return null;
   return value;
+}
+
+function resolveMoviePoster(movie = {}) {
+  const normalised = normalisePoster(movie.poster_url);
+  const localFallback = LOCAL_PREVIEW_POSTERS[movie.imdb_id];
+  if (!normalised || normalised.includes('example.com/posters/')) {
+    return localFallback || null;
+  }
+  return normalised;
+}
+
+function resolveMoviePosterCandidates(movie = {}) {
+  const primary = resolveMoviePoster(movie);
+  const candidates = [];
+
+  if (primary) {
+    candidates.push(primary);
+    if (/^https?:\/\//i.test(primary)) {
+      candidates.push(`https://images.weserv.nl/?url=${encodeURIComponent(primary)}&w=600&fit=cover&output=webp`);
+    }
+  }
+
+  const imdbId = String(movie.imdb_id || '').trim();
+  if (/^tt\d+$/.test(imdbId)) {
+    candidates.push(`${API_BASE}/posters/${encodeURIComponent(imdbId)}`);
+  }
+
+  return [...new Set(candidates)];
+}
+
+function showPosterPlaceholder(container) {
+  container.replaceChildren();
+  container.textContent = 'No poster yet';
+  container.setAttribute('aria-hidden', 'true');
+  container.classList.add('movie-poster--placeholder');
 }
 
 function capitalise(value = '') {
@@ -951,25 +1228,67 @@ async function safeJson(response) {
   try {
     return await response.json();
   } catch (error) {
+    logError('failed to parse JSON response', { message: error.message });
     return null;
   }
+}
+
+function safeParseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    logError('failed to parse JSON body', { preview: text.slice(0, 120) });
+    return null;
+  }
+}
+
+function parseArrayPayload(bodyText, label) {
+  const parsed = safeParseJson(bodyText);
+  if (Array.isArray(parsed)) return parsed;
+
+  if (parsed && typeof parsed === 'object') {
+    const nested = typeof parsed.body === 'string' ? safeParseJson(parsed.body) : parsed?.body;
+    if (Array.isArray(nested)) return nested;
+  }
+
+  logError(`unexpected ${label} payload`, { preview: bodyText.slice(0, 200) });
+  return [];
+}
+
+function parseSearchPayload(bodyText) {
+  const parsed = safeParseJson(bodyText);
+  if (parsed && Array.isArray(parsed.results)) return parsed;
+
+  if (parsed && typeof parsed === 'object' && parsed.body) {
+    const inner = typeof parsed.body === 'string' ? safeParseJson(parsed.body) : parsed.body;
+    if (inner && Array.isArray(inner.results)) return inner;
+  }
+
+  logError('unexpected search payload', { preview: bodyText.slice(0, 200) });
+  return { results: [] };
 }
 
 // Household Management
 
 function getStoredHouseholdId() {
-  return localStorage.getItem(HOUSEHOLD_STORAGE_KEY);
+  return getRememberedSelection().householdId || localStorage.getItem(HOUSEHOLD_STORAGE_KEY);
 }
 
 function setStoredHouseholdId(id) {
+  const previous = getRememberedSelection();
   if (id) {
     localStorage.setItem(HOUSEHOLD_STORAGE_KEY, id);
   } else {
     localStorage.removeItem(HOUSEHOLD_STORAGE_KEY);
   }
+  setRememberedSelection({
+    householdId: id || '',
+    userName: previous.householdId === id ? previous.userName : '',
+  });
 }
 
 async function initApp() {
+  logDebug('Debug mode active', { debugEnabled });
   setupTabs();
 
   // if (displayNameForm) { ... } // Removed
@@ -986,15 +1305,13 @@ async function initApp() {
 
   if (backToHouseholdsButton) {
     backToHouseholdsButton.addEventListener('click', () => {
-      setStoredHouseholdId(null);
-      currentHouseholdId = null;
-      showHouseholdSelection();
+      showHouseholdSelection({ historyMode: 'push', refresh: false });
     });
   }
 
   if (changeNameButton) {
     changeNameButton.addEventListener('click', () => {
-      showLanding({ focusInput: true, selectInput: true, prefill: true });
+      showLanding({ focusInput: true, selectInput: true, prefill: true, historyMode: 'push' });
     });
   }
 
@@ -1016,28 +1333,42 @@ async function initApp() {
     const household = allHouseholds.find(h => h.id === storedId);
     if (household) {
       currentHouseholdId = storedId;
+      const remembered = getRememberedSelection();
+      const legacyName = localStorage.getItem(STORAGE_KEY) || '';
+      if (!remembered.householdId && legacyName && household.users?.includes(legacyName)) {
+        setRememberedSelection({ householdId: storedId, userName: legacyName });
+      }
       renderUsers(household);
 
       hydrateDisplayName();
       updateChangeNameButtonLabel();
 
-      if (getDisplayName()) {
-        hideLanding();
-        fetchMovies();
+      const displayName = getDisplayName();
+      const hasRememberedUser = Boolean(displayName && household.users?.includes(displayName));
+      if (displayName && !hasRememberedUser) setDisplayName('');
+
+      if (window.location.hash === VIEW_HASHES.households) {
+        showHouseholdSelection({ historyMode: 'replace', refresh: false });
+      } else if (window.location.hash === VIEW_HASHES.people || !hasRememberedUser) {
+        showLanding({ historyMode: 'replace' });
       } else {
-        showLanding();
+        hideLanding({ historyMode: 'replace' });
+        fetchMovies();
       }
     } else {
       // Stored ID is invalid or household deleted
       setStoredHouseholdId(null);
-      showHouseholdSelection();
+      showHouseholdSelection({ historyMode: 'replace', refresh: false });
     }
   } else {
-    showHouseholdSelection();
+    showHouseholdSelection({ historyMode: 'replace', refresh: false });
   }
+
+  window.addEventListener('popstate', handleHistoryNavigation);
 }
 
-function showHouseholdSelection() {
+function showHouseholdSelection(options = {}) {
+  const { historyMode = 'push', refresh = true } = options;
   if (householdScreen) {
     householdScreen.hidden = false;
     householdScreen.setAttribute('aria-hidden', 'false');
@@ -1049,18 +1380,46 @@ function showHouseholdSelection() {
   if (appMain) {
     appMain.hidden = true;
   }
-  fetchHouseholds();
+  if (changeNameButton) {
+    changeNameButton.hidden = true;
+  }
+  document.body?.classList.add('showing-landing');
+  syncViewHistory('households', historyMode);
+  if (refresh) fetchHouseholds();
+}
+
+function handleHistoryNavigation(event) {
+  const stateView = event.state?.moviesLocalView;
+  const hashView = Object.entries(VIEW_HASHES)
+    .find(([, hash]) => hash === window.location.hash)?.[0];
+  const view = stateView || hashView || 'households';
+
+  if (view === 'app' && currentHouseholdId && getDisplayName()) {
+    hideLanding({ historyMode: 'none' });
+    fetchMovies({ showLoading: false });
+  } else if (view === 'people' && currentHouseholdId) {
+    const household = allHouseholds.find((item) => item.id === currentHouseholdId);
+    if (household) renderUsers(household);
+    showLanding({ historyMode: 'none' });
+  } else {
+    showHouseholdSelection({ historyMode: 'none', refresh: false });
+  }
 }
 
 async function fetchHouseholds() {
   try {
+    logDebug('Fetching households', { url: `${API_BASE}/households` });
     const response = await fetch(`${API_BASE}/households`);
-    if (!response.ok) throw new Error('Failed to fetch households');
-    const households = await response.json();
+    const bodyText = await response.text();
+    logDebug('Households response', { status: response.status, bodyPreview: bodyText.slice(0, 200) });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch households (${response.status})`);
+    }
+    const households = parseArrayPayload(bodyText, 'households');
     allHouseholds = households;
     renderHouseholds(households);
   } catch (error) {
-    console.error(error);
+    logError('households request failed', { message: error.message });
     if (householdList) {
       householdList.textContent = 'Unable to load households.';
     }
@@ -1078,25 +1437,50 @@ function renderHouseholds(households) {
     return;
   }
 
+  const remembered = getRememberedSelection();
   const ul = document.createElement('ul');
-  ul.className = 'card-list';
+  ul.className = 'choice-list';
 
   households.forEach(h => {
     const li = document.createElement('li');
-    li.className = 'result-card'; // Reuse result card styling
+    const isRemembered = h.id === remembered.householdId;
+    li.className = `household-row${isRemembered ? ' is-remembered' : ''}`;
+
+    const avatar = document.createElement('span');
+    avatar.className = 'choice-avatar';
+    avatar.setAttribute('aria-hidden', 'true');
+    const householdIcon = document.createElement('img');
+    householdIcon.src = 'assets/icons/popcorn.svg';
+    householdIcon.alt = '';
+    avatar.appendChild(householdIcon);
 
     const div = document.createElement('div');
-    div.className = 'result-details';
+    div.className = 'choice-copy';
     const h3 = document.createElement('h3');
-    h3.className = 'result-title';
     h3.textContent = h.name;
+    if (isRemembered) {
+      const rememberedLabel = document.createElement('span');
+      rememberedLabel.className = 'remembered-label';
+      rememberedLabel.textContent = 'Last used';
+      h3.appendChild(rememberedLabel);
+    }
+    const meta = document.createElement('p');
+    const memberCount = Array.isArray(h.users) ? h.users.length : 0;
+    meta.textContent = `${memberCount} ${memberCount === 1 ? 'person' : 'people'} sharing this list`;
     div.appendChild(h3);
+    div.appendChild(meta);
 
     const btn = document.createElement('button');
-    btn.className = 'primary';
-    btn.textContent = 'Join';
+    btn.className = 'choice-action';
+    const buttonText = document.createElement('span');
+    buttonText.textContent = isRemembered ? 'Continue' : 'Choose';
+    const arrow = document.createElement('img');
+    arrow.src = 'assets/icons/arrow-right.svg';
+    arrow.alt = '';
+    btn.append(buttonText, arrow);
     btn.addEventListener('click', () => selectHousehold(h.id));
 
+    li.appendChild(avatar);
     li.appendChild(div);
     li.appendChild(btn);
     ul.appendChild(li);
@@ -1107,19 +1491,22 @@ function renderHouseholds(households) {
 
 async function createHousehold(name) {
   try {
+    logDebug('Creating household', { name });
     const response = await fetch(`${API_BASE}/households`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name })
     });
 
+    const bodyText = await response.text();
+    logDebug('Create household response', { status: response.status, bodyPreview: bodyText.slice(0, 200) });
     if (!response.ok) throw new Error('Failed to create household');
 
-    const household = await response.json();
+    const household = safeParseJson(bodyText);
     allHouseholds.push(household);
     selectHousehold(household.id);
   } catch (error) {
-    console.error(error);
+    logError('create household failed', { message: error.message });
     alert('Failed to create household');
   }
 }
@@ -1131,16 +1518,18 @@ function selectHousehold(id) {
   const household = allHouseholds.find(h => h.id === id);
   if (household) {
     renderUsers(household);
-    showLanding(); // Show user selection
+    updateSelectedHouseholdCopy();
+    showLanding({ historyMode: 'push' });
   } else {
     // Should not happen if data is consistent, but maybe fetch again?
     fetchHouseholds().then(() => {
       const h = allHouseholds.find(h => h.id === id);
       if (h) {
         renderUsers(h);
-        showLanding();
+        updateSelectedHouseholdCopy();
+        showLanding({ historyMode: 'push' });
       } else {
-        showHouseholdSelection();
+        showHouseholdSelection({ historyMode: 'push' });
       }
     });
   }
@@ -1149,6 +1538,7 @@ function selectHousehold(id) {
 function renderUsers(household) {
   if (!userList) return;
   userList.innerHTML = '';
+  updateSelectedHouseholdCopy();
 
   if (!household.users || household.users.length === 0) {
     const p = document.createElement('p');
@@ -1157,38 +1547,63 @@ function renderUsers(household) {
     return;
   }
 
+  const rememberedUser = getRememberedSelection().householdId === household.id
+    ? getRememberedSelection().userName
+    : '';
   const ul = document.createElement('ul');
-  ul.className = 'card-list';
+  ul.className = 'choice-list';
 
   household.users.forEach(user => {
     const li = document.createElement('li');
-    li.className = 'result-card';
+    const isRemembered = user === rememberedUser;
+    li.className = `person-row${isRemembered ? ' is-remembered' : ''}`;
+
+    const avatar = document.createElement('span');
+    avatar.className = 'choice-avatar';
+    avatar.setAttribute('aria-hidden', 'true');
+    avatar.textContent = getInitials(user);
 
     const div = document.createElement('div');
-    div.className = 'result-details';
+    div.className = 'choice-copy';
     const h3 = document.createElement('h3');
-    h3.className = 'result-title';
     h3.textContent = user;
+    if (isRemembered) {
+      const rememberedLabel = document.createElement('span');
+      rememberedLabel.className = 'remembered-label';
+      rememberedLabel.textContent = 'Remembered';
+      h3.appendChild(rememberedLabel);
+    }
+    const meta = document.createElement('p');
+    meta.textContent = 'Add ideas and vote on the queue';
     div.appendChild(h3);
+    div.appendChild(meta);
 
     const actions = document.createElement('div');
-    actions.style.display = 'flex';
-    actions.style.gap = '0.5rem';
+    actions.className = 'person-actions';
 
     const selectBtn = document.createElement('button');
-    selectBtn.className = 'primary';
-    selectBtn.textContent = 'Select';
+    selectBtn.className = 'choice-action';
+    const selectText = document.createElement('span');
+    selectText.textContent = isRemembered ? 'Continue' : 'Choose';
+    const arrow = document.createElement('img');
+    arrow.src = 'assets/icons/arrow-right.svg';
+    arrow.alt = '';
+    selectBtn.append(selectText, arrow);
     selectBtn.addEventListener('click', () => selectUser(user));
 
     const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'secondary';
-    deleteBtn.textContent = '×';
-    deleteBtn.title = 'Remove user';
+    deleteBtn.className = 'remove-person';
+    deleteBtn.setAttribute('aria-label', `Remove ${user}`);
+    const trashIcon = document.createElement('img');
+    trashIcon.src = 'assets/icons/trash.svg';
+    trashIcon.alt = '';
+    deleteBtn.appendChild(trashIcon);
     deleteBtn.addEventListener('click', () => removeUser(household.id, user));
 
     actions.appendChild(selectBtn);
     actions.appendChild(deleteBtn);
 
+    li.appendChild(avatar);
     li.appendChild(div);
     li.appendChild(actions);
     ul.appendChild(li);
@@ -1200,13 +1615,14 @@ function renderUsers(household) {
 async function addUser(name) {
   if (!currentHouseholdId) return;
   try {
+    logDebug('Adding user', { householdId: currentHouseholdId, name });
     const response = await fetch(`${API_BASE}/households/${currentHouseholdId}/users`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ voter: name })
     });
     if (!response.ok) throw new Error('Failed to add user');
-    const updatedHousehold = await response.json();
+    const updatedHousehold = await safeJson(response);
 
     // Update local state
     const index = allHouseholds.findIndex(h => h.id === updatedHousehold.id);
@@ -1223,14 +1639,19 @@ async function addUser(name) {
 async function removeUser(householdId, name) {
   if (!confirm(`Remove ${name} from this household?`)) return;
   try {
+    logDebug('Removing user', { householdId, name });
     const response = await fetch(`${API_BASE}/households/${householdId}/users/${name}`, {
       method: 'DELETE'
     });
     if (!response.ok) throw new Error('Failed to remove user');
-    const updatedHousehold = await response.json();
+    const updatedHousehold = await safeJson(response);
 
     const index = allHouseholds.findIndex(h => h.id === updatedHousehold.id);
     if (index !== -1) allHouseholds[index] = updatedHousehold;
+
+    if (householdId === currentHouseholdId && name === getDisplayName()) {
+      setDisplayName('');
+    }
 
     renderUsers(updatedHousehold);
   } catch (error) {
@@ -1243,12 +1664,26 @@ function selectUser(name) {
   setDisplayName(name);
   updateChangeNameButtonLabel(name);
   completeNameSetup({ message: `Welcome back, ${name}!` });
+  logDebug('User selected', { name, householdId: currentHouseholdId });
+}
+
+function getInitials(value) {
+  return String(value || '')
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('') || '?';
 }
 
 // Start
 initApp();
 
-// displayNameInput.addEventListener('input', ...); // Removed
+if (displayNameInput) {
+  displayNameInput.addEventListener('input', () => {
+    updateDailyVoteCount(latestMovies);
+  });
+}
 
 searchForm.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -1272,4 +1707,3 @@ if (moviesFilterInput) {
     renderMovies(latestMovies);
   });
 }
-

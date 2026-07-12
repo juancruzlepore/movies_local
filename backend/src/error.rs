@@ -1,9 +1,9 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::response;
 use crate::storage::StorageError;
 
 #[derive(Serialize)]
@@ -42,6 +42,6 @@ impl IntoResponse for AppError {
             message: self.to_string(),
         };
 
-        (status, Json(body)).into_response()
+        response::build_response(status, &body)
     }
 }

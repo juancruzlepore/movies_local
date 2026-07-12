@@ -1,5 +1,6 @@
 mod error;
 mod models;
+mod response;
 mod storage;
 
 use std::net::SocketAddr;
@@ -8,14 +9,20 @@ use std::{env, time::Duration};
 
 use axum::extract::{Path, Query, State};
 use axum::http::{Method, StatusCode};
+use axum::response::Redirect;
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{body::Body, Json, Router};
 use chrono::{Duration as ChronoDuration, Utc};
 use error::AppError;
+use lambda_http::{
+    run as lambda_run, service_fn as lambda_service, Body as LambdaBody, Request as LambdaRequest,
+    Response as LambdaResponse, Service,
+};
 use models::{
     Household, HouseholdRequest, Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem,
     Vote, VoteRequest,
 };
+use response::ApiResponse;
 use serde::Deserialize;
 use storage::{Storage, StorageConfig, VoteOutcome, SMALL_VOTE_POINTS};
 use tokio::net::TcpListener;
@@ -108,17 +115,25 @@ async fn main() -> Result<(), anyhow::Error> {
             post(mark_watched),
         )
         .route("/search", get(search_movies))
+        .route("/posters/:imdb_id", get(resolve_poster))
         .with_state(state)
         .layer(cors);
 
-    let addr: SocketAddr = bind_addr.parse()?;
-    let listener = TcpListener::bind(addr).await?;
-    let local_addr = listener.local_addr()?;
-    info!("listening on {local_addr}");
+    if is_lambda_env() {
+        info!("detected Lambda environment; running handler mode");
+        run_lambda(app)
+            .await
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    } else {
+        let addr: SocketAddr = bind_addr.parse()?;
+        let listener = TcpListener::bind(addr).await?;
+        let local_addr = listener.local_addr()?;
+        info!("listening on {local_addr}");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
+    }
 
     Ok(())
 }
@@ -148,63 +163,63 @@ async fn shutdown_signal() {
     }
 }
 
-async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({"status": "ok"}))
+async fn health() -> ApiResponse<serde_json::Value> {
+    ApiResponse::ok(serde_json::json!({"status": "ok"}))
 }
 
-async fn list_households(State(state): State<AppState>) -> Json<Vec<Household>> {
-    Json(state.storage.list_households())
+async fn list_households(State(state): State<AppState>) -> ApiResponse<Vec<Household>> {
+    ApiResponse::ok(state.storage.list_households())
 }
 
 async fn create_household(
     State(state): State<AppState>,
     Json(payload): Json<HouseholdRequest>,
-) -> Result<Json<Household>, AppError> {
+) -> Result<ApiResponse<Household>, AppError> {
     if payload.name.trim().is_empty() {
         return Err(AppError::BadRequest("name cannot be empty".into()));
     }
     let household = state.storage.create_household(payload.name).await?;
-    Ok(Json(household))
+    Ok(ApiResponse::ok(household))
 }
 
 async fn add_user(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(payload): Json<VoteRequest>, // Reusing VoteRequest for simple {voter: name} payload
-) -> Result<Json<Household>, AppError> {
+) -> Result<ApiResponse<Household>, AppError> {
     if payload.voter.trim().is_empty() {
         return Err(AppError::BadRequest("voter cannot be empty".into()));
     }
     let household = state.storage.add_user(id, payload.voter).await?;
-    Ok(Json(household))
+    Ok(ApiResponse::ok(household))
 }
 
 async fn remove_user(
     State(state): State<AppState>,
     Path((id, name)): Path<(Uuid, String)>,
-) -> Result<Json<Household>, AppError> {
+) -> Result<ApiResponse<Household>, AppError> {
     let household = state.storage.remove_user(id, name).await?;
-    Ok(Json(household))
+    Ok(ApiResponse::ok(household))
 }
 
 async fn list_movies(
     State(state): State<AppState>,
     Path(household_id): Path<Uuid>,
-) -> Result<Json<Vec<Movie>>, AppError> {
+) -> Result<ApiResponse<Vec<Movie>>, AppError> {
     if let Some(mock_movies) = &state.mock_movies {
-        return Ok(Json(mock_movies.clone()));
+        return Ok(ApiResponse::ok(mock_movies.clone()));
     }
 
     let mut movies = state.storage.list(household_id)?;
     movies.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    Ok(Json(movies))
+    Ok(ApiResponse::ok(movies))
 }
 
 async fn add_movie(
     State(state): State<AppState>,
     Path(household_id): Path<Uuid>,
     Json(mut payload): Json<NewMovie>,
-) -> Result<(StatusCode, Json<Movie>), AppError> {
+) -> Result<ApiResponse<Movie>, AppError> {
     validate_new_movie(&payload)?;
 
     match state.fetch_movie_runtime(&payload.imdb_id).await {
@@ -218,19 +233,19 @@ async fn add_movie(
     }
 
     let movie = state.storage.add(household_id, payload).await?;
-    Ok((StatusCode::CREATED, Json(movie)))
+    Ok(ApiResponse::new(StatusCode::CREATED, movie))
 }
 
 async fn vote_movie(
     State(state): State<AppState>,
     Path((household_id, id)): Path<(Uuid, Uuid)>,
     Json(payload): Json<VoteRequest>,
-) -> Result<Json<Movie>, AppError> {
+) -> Result<ApiResponse<Movie>, AppError> {
     validate_vote(&payload)?;
     let voter = payload.voter.trim().to_string();
 
     match state.storage.vote(household_id, id, voter.clone()).await? {
-        VoteOutcome::PointsAwarded(movie) => Ok(Json(movie)),
+        VoteOutcome::PointsAwarded(movie) => Ok(ApiResponse::ok(movie)),
         VoteOutcome::LimitReached { limit } => {
             warn!(
                 "vote rejected voter='{}' movie_id='{}' reason='daily limit'",
@@ -248,9 +263,9 @@ async fn vote_movie(
 async fn mark_watched(
     State(state): State<AppState>,
     Path((household_id, id)): Path<(Uuid, Uuid)>,
-) -> Result<Json<Movie>, AppError> {
+) -> Result<ApiResponse<Movie>, AppError> {
     match state.storage.mark_watched(household_id, id).await? {
-        Some(movie) => Ok(Json(movie)),
+        Some(movie) => Ok(ApiResponse::ok(movie)),
         None => Err(AppError::NotFound("movie not found".into())),
     }
 }
@@ -258,7 +273,7 @@ async fn mark_watched(
 async fn search_movies(
     State(state): State<AppState>,
     Query(params): Query<SearchParams>,
-) -> Result<Json<SearchResponse>, AppError> {
+) -> Result<ApiResponse<SearchResponse>, AppError> {
     if params.query.trim().is_empty() {
         return Err(AppError::BadRequest(
             "query parameter cannot be empty".into(),
@@ -281,7 +296,31 @@ async fn search_movies(
         }
     };
 
-    Ok(Json(response))
+    Ok(ApiResponse::ok(response))
+}
+
+async fn resolve_poster(
+    State(state): State<AppState>,
+    Path(imdb_id): Path<String>,
+) -> Result<Redirect, AppError> {
+    if !is_valid_imdb_id(&imdb_id) {
+        return Err(AppError::BadRequest("invalid IMDb id".into()));
+    }
+
+    let poster_url = state.fetch_movie_poster(&imdb_id).await?;
+    let proxied_url = format!(
+        "https://images.weserv.nl/?url={}&w=600&fit=cover&output=webp",
+        urlencoding::encode(&poster_url)
+    );
+    Ok(Redirect::temporary(&proxied_url))
+}
+
+fn is_valid_imdb_id(value: &str) -> bool {
+    value.len() >= 3
+        && value.starts_with("tt")
+        && value[2..]
+            .chars()
+            .all(|character| character.is_ascii_digit())
 }
 
 fn validate_new_movie(payload: &NewMovie) -> Result<(), AppError> {
@@ -432,6 +471,49 @@ fn build_mock_movies() -> Vec<Movie> {
 }
 
 impl AppState {
+    async fn fetch_movie_poster(&self, imdb_id: &str) -> Result<String, AppError> {
+        #[derive(Deserialize)]
+        struct OmdbPosterResponse {
+            #[serde(rename = "Poster")]
+            poster: Option<String>,
+            #[serde(rename = "Response")]
+            response: String,
+            #[serde(rename = "Error")]
+            error: Option<String>,
+        }
+
+        let key = self
+            .omdb_api_key
+            .as_ref()
+            .ok_or_else(|| AppError::Configuration("OMDB_API_KEY is not configured".into()))?;
+        let response = self
+            .client
+            .get("https://www.omdbapi.com/")
+            .query(&[("apikey", key.as_str()), ("i", imdb_id)])
+            .send()
+            .await
+            .map_err(|err| AppError::Downstream(format!("omdb request failed: {err}")))?;
+
+        if !response.status().is_success() {
+            return Err(AppError::Downstream(format!(
+                "omdb returned unexpected status: {}",
+                response.status()
+            )));
+        }
+
+        let payload: OmdbPosterResponse = response.json().await.map_err(|err| {
+            AppError::Downstream(format!("failed to decode omdb response: {err}"))
+        })?;
+        let poster = payload.poster.filter(|value| value != "N/A");
+        if payload.response.eq_ignore_ascii_case("true") {
+            poster.ok_or_else(|| AppError::NotFound("poster not found".into()))
+        } else {
+            Err(AppError::NotFound(
+                payload.error.unwrap_or_else(|| "poster not found".into()),
+            ))
+        }
+    }
+
     async fn search_omdb(&self, params: &SearchParams) -> Result<SearchResponse, AppError> {
         let key = self
             .omdb_api_key
@@ -554,4 +636,54 @@ fn parse_runtime_minutes(value: &str) -> Option<u32> {
     let digits = trimmed.split_whitespace().next().unwrap_or(trimmed);
 
     digits.parse().ok()
+}
+
+fn is_lambda_env() -> bool {
+    matches!(
+        std::env::var("API_GATEWAY_LAMBDA_MODE")
+            .or_else(|_| std::env::var("AWS_LAMBDA_RUNTIME_API"))
+            .as_deref(),
+        Ok(_)
+    )
+}
+
+async fn run_lambda(app: Router) -> Result<(), lambda_http::Error> {
+    let handler = lambda_service(move |event: LambdaRequest| {
+        let mut app = app.clone();
+        async move {
+            let axum_request = lambda_to_axum(event)?;
+            let response = app
+                .call(axum_request)
+                .await
+                .map_err(lambda_http::Error::from)?;
+            axum_to_lambda(response).await
+        }
+    });
+
+    lambda_run(handler).await
+}
+
+fn lambda_to_axum(request: LambdaRequest) -> Result<axum::http::Request<Body>, lambda_http::Error> {
+    let (parts, body) = request.into_parts();
+    let body = match body {
+        LambdaBody::Empty => Body::empty(),
+        LambdaBody::Text(text) => Body::from(text),
+        LambdaBody::Binary(bin) => Body::from(bin),
+    };
+
+    Ok(axum::http::Request::from_parts(parts, body))
+}
+
+async fn axum_to_lambda(
+    response: axum::http::Response<axum::body::Body>,
+) -> Result<LambdaResponse<LambdaBody>, lambda_http::Error> {
+    let (parts, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(lambda_http::Error::from)?;
+
+    Ok(lambda_http::Response::from_parts(
+        parts,
+        LambdaBody::Binary(bytes.to_vec()),
+    ))
 }

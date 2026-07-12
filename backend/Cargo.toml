@@ -19,3 +19,5 @@ chrono = { version = "0.4", features = ["serde", "clock"] }
 tower-http = { version = "0.5", features = ["cors"] }
 aws-config = { version = "1.6.0", features = ["behavior-version-latest"] }
 aws-sdk-s3 = { version = "1.96.0", features = ["behavior-version-latest"] }
+lambda_http = "0.11"
+urlencoding = "2.1"

@@ -4,88 +4,137 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#12100f">
   <title>Movies Local</title>
-  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="assets/icons/popcorn.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css?v=after-credits-4">
 </head>
 
 <body>
   <header class="app-header">
     <div class="header-content">
-      <div class="header-text">
-        <h1>Movies Local</h1>
-        <p>Add movies and shows with friends on the same network.</p>
-      </div>
-      <button id="change-name" class="secondary header-change-button" type="button" hidden>
-        Change name
+      <a class="brand" href="#households" aria-label="Movies Local home">
+        <span>Movies Local</span>
+      </a>
+      <button id="change-name" class="identity-switch" type="button" hidden>
+        <span class="identity-switch-copy">
+          <span id="active-user-label" class="identity-switch-name"></span>
+          <span id="active-household-label" class="identity-switch-household"></span>
+        </span>
+        <img src="assets/icons/user-switch.svg" alt="">
       </button>
     </div>
   </header>
 
-  <section id="household-screen" class="landing-screen" aria-labelledby="household-title">
-    <div class="landing-card">
-      <h2 id="household-title" class="landing-title">Select Household</h2>
-      <p class="landing-description">Choose a household to join or create a new one.</p>
+  <section id="household-screen" class="choice-screen" aria-labelledby="household-title">
+    <div class="choice-content">
+      <p class="eyebrow">Your shared watchlist</p>
+      <h1 id="household-title" class="choice-title">Let’s pick<br>tonight’s movie.</h1>
+      <p class="choice-description">Choose your household to start deciding what to watch together.</p>
 
-      <div id="household-list" class="household-list">
-        <!-- Households will be populated here -->
+      <div id="household-list" class="household-list" aria-live="polite">
+        <!-- Households populated here -->
       </div>
 
-      <form id="create-household-form" class="identity-card">
-        <label for="new-household-name">New Household</label>
-        <div class="input-group">
-          <input id="new-household-name" type="text" placeholder="Household Name" required>
-          <button class="primary" type="submit">Create</button>
-        </div>
-      </form>
+      <details class="create-disclosure">
+        <summary>
+          <span class="summary-icon"><img src="assets/icons/plus.svg" alt=""></span>
+          <span>
+            <strong>Create a household</strong>
+            <small>Start a separate list for another group.</small>
+          </span>
+        </summary>
+        <form id="create-household-form" class="inline-form">
+          <label for="new-household-name">Household name</label>
+          <div class="input-group">
+            <input id="new-household-name" type="text" placeholder="e.g. Sunday Film Club" autocomplete="off" required>
+            <button class="primary" type="submit">Create</button>
+          </div>
+        </form>
+      </details>
+
+      <p class="privacy-note">
+        <img src="assets/icons/lock-key.svg" alt="">
+        <span><strong>Your choices stay on this device.</strong>Your household and person are remembered in this browser.</span>
+      </p>
     </div>
   </section>
 
-  <section id="landing-screen" class="landing-screen" aria-labelledby="landing-title" hidden>
-    <div class="landing-card">
-      <h2 id="landing-title" class="landing-title">Who are you?</h2>
-      <p class="landing-description">Select your name or add a new one.</p>
+  <section id="landing-screen" class="choice-screen" aria-labelledby="landing-title" hidden>
+    <div class="choice-content">
+      <button id="back-to-households" class="back-button" type="button">
+        <img src="assets/icons/arrow-left.svg" alt="">
+        All households
+      </button>
+      <p class="eyebrow">Step 2 of 2</p>
+      <h1 id="landing-title" class="choice-title">Who’s<br>watching?</h1>
+      <p class="choice-description">Choose your name for <strong id="selected-household-name"></strong>. We’ll remember you here.</p>
 
-      <div id="user-list" class="card-list">
+      <div id="user-list" class="people-list" aria-live="polite">
         <!-- Users populated here -->
       </div>
 
-      <form id="add-user-form" class="identity-card" style="margin-top: 1rem;">
-        <label for="new-user-name" class="visually-hidden">New User Name</label>
-        <div class="input-group">
-          <input id="new-user-name" type="text" placeholder="Add new user" autocomplete="off" required>
-          <button class="primary" type="submit">Add</button>
-        </div>
-      </form>
-
-      <button id="back-to-households" class="secondary" style="margin-top: 1rem;">Switch Household</button>
+      <details class="create-disclosure compact-disclosure">
+        <summary>
+          <span class="summary-icon"><img src="assets/icons/plus.svg" alt=""></span>
+          <span>
+            <strong>Add someone new</strong>
+            <small>They’ll be able to add and vote too.</small>
+          </span>
+        </summary>
+        <form id="add-user-form" class="inline-form">
+          <label for="new-user-name">Person’s name</label>
+          <div class="input-group">
+            <input id="new-user-name" type="text" placeholder="First name" autocomplete="off" required>
+            <button class="primary" type="submit">Add</button>
+          </div>
+        </form>
+      </details>
     </div>
   </section>
 
   <main class="app-main" hidden>
+    <header class="main-heading">
+      <div>
+        <p class="eyebrow">Tonight’s shortlist</p>
+        <h1>The shared queue.</h1>
+      </div>
+      <p>Vote together. The titles with the most points rise to the top.</p>
+    </header>
+
     <nav class="tab-bar" role="tablist" aria-label="Primary content tabs">
       <button id="tab-shared-list" class="tab-button" type="button" role="tab" aria-controls="shared-list-panel"
         aria-selected="true">Shared list</button>
       <button id="tab-search" class="tab-button" type="button" role="tab" aria-controls="search-panel"
-        aria-selected="false" tabindex="-1">Search</button>
+        aria-selected="false" tabindex="-1">Find something</button>
     </nav>
 
     <section id="shared-list-panel" class="list-card tab-panel" role="tabpanel" aria-labelledby="tab-shared-list"
       tabindex="0">
       <header class="section-header">
-        <h2>Shared list</h2>
+        <div>
+          <h2>What should we watch?</h2>
+          <p id="daily-vote-count" class="vote-counter" role="status" aria-live="polite"></p>
+        </div>
         <div class="section-controls">
-          <label class="visually-hidden" for="movies-filter">Filter shared list</label>
-          <input id="movies-filter" type="search" placeholder="Filter list..." autocomplete="off">
-          <button id="refresh-movies" class="secondary">Refresh</button>
+          <label class="filter-control" for="movies-filter">
+            <img src="assets/icons/magnifying-glass.svg" alt="">
+            <span class="visually-hidden">Filter shared list</span>
+            <input id="movies-filter" type="search" placeholder="Filter the list" autocomplete="off">
+          </label>
+          <button id="refresh-movies" class="icon-button" type="button" aria-label="Refresh shared list">
+            <img src="assets/icons/arrows-clockwise.svg" alt="">
+          </button>
         </div>
       </header>
-      <p id="daily-vote-count" class="vote-counter" role="status" aria-live="polite"></p>
       <div class="shared-lists">
         <section class="list-subsection">
+          <p class="section-number">01</p>
           <h3 class="list-subtitle">Top picks by points</h3>
           <ul id="movies-list-by-points" class="card-list"></ul>
         </section>
         <section class="list-subsection">
+          <p class="section-number">02</p>
           <h3 class="list-subtitle">Newest additions</h3>
           <ul id="movies-list-by-recent" class="card-list"></ul>
         </section>
@@ -94,12 +143,16 @@
 
     <section id="search-panel" class="search-card tab-panel" role="tabpanel" aria-labelledby="tab-search" tabindex="0"
       hidden>
+      <header class="search-intro">
+        <p class="section-number">Search the catalogue</p>
+        <h2>Bring an idea to the room.</h2>
+      </header>
       <form id="search-form">
-        <label for="search-query">Search IMDB</label>
+        <label for="search-query">Movie or series title</label>
         <div class="search-group">
           <input id="search-query" type="search" placeholder="e.g. The Matrix" required minlength="2">
-          <select id="search-type">
-            <option value="">All</option>
+          <select id="search-type" aria-label="Type">
+            <option value="">Everything</option>
             <option value="movie">Movies</option>
             <option value="series">Series</option>
           </select>
@@ -107,7 +160,7 @@
         </div>
       </form>
       <div id="search-feedback" role="status" aria-live="polite"></div>
-      <ul id="search-results" class="card-list"></ul>
+      <ul id="search-results" class="card-list search-results"></ul>
     </section>
   </main>
 
@@ -141,7 +194,7 @@
     </li>
   </template>
 
-  <script src="app.js" type="module"></script>
+  <script src="app.js?v=poster-fallback-1" type="module"></script>
 </body>
 
 </html>
