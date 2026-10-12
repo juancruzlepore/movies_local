@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#12100f">
   <title>Movies Local</title>
   <link rel="icon" href="assets/icons/popcorn.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=after-credits-4">
+  <link rel="stylesheet" href="styles.css?v=watched-archive-1">
 </head>
 
 <body>
@@ -105,6 +105,10 @@
     <nav class="tab-bar" role="tablist" aria-label="Primary content tabs">
       <button id="tab-shared-list" class="tab-button" type="button" role="tab" aria-controls="shared-list-panel"
         aria-selected="true">Shared list</button>
+      <button id="tab-watched" class="tab-button" type="button" role="tab" aria-controls="watched-panel"
+        aria-selected="false" tabindex="-1">
+        Watched <span id="watched-count" class="tab-count" aria-label="0 watched">0</span>
+      </button>
       <button id="tab-search" class="tab-button" type="button" role="tab" aria-controls="search-panel"
         aria-selected="false" tabindex="-1">Find something</button>
     </nav>
@@ -114,7 +118,10 @@
       <header class="section-header">
         <div>
           <h2>What should we watch?</h2>
-          <p id="daily-vote-count" class="vote-counter" role="status" aria-live="polite"></p>
+          <div class="vote-summary" role="status" aria-live="polite">
+            <p id="daily-vote-count" class="vote-counter"></p>
+            <p id="voting-day-balance" class="voting-day-balance"></p>
+          </div>
         </div>
         <div class="section-controls">
           <label class="filter-control" for="movies-filter">
@@ -139,6 +146,18 @@
           <ul id="movies-list-by-recent" class="card-list"></ul>
         </section>
       </div>
+    </section>
+
+    <section id="watched-panel" class="watched-card tab-panel" role="tabpanel" aria-labelledby="tab-watched"
+      tabindex="0" hidden>
+      <header class="section-header watched-header">
+        <div>
+          <p class="section-number">Past picks</p>
+          <h2>Watched together.</h2>
+          <p class="watched-intro">Your finished picks live here, ready for a future rewatch.</p>
+        </div>
+      </header>
+      <ul id="watched-movies-list" class="card-list watched-list"></ul>
     </section>
 
     <section id="search-panel" class="search-card tab-panel" role="tabpanel" aria-labelledby="tab-search" tabindex="0"
@@ -179,6 +198,10 @@
 
   <template id="movie-item-template">
     <li class="movie-card">
+      <button class="delete-movie" type="button" aria-label="Hold to delete movie" title="Hold to delete">
+        <span class="delete-movie-ring" aria-hidden="true"></span>
+        <img src="assets/icons/trash.svg" alt="">
+      </button>
       <div class="movie-poster" aria-hidden="true"></div>
       <div class="movie-content">
         <div class="movie-main">
@@ -194,7 +217,25 @@
     </li>
   </template>
 
-  <script src="app.js?v=poster-fallback-1" type="module"></script>
+  <template id="watched-movie-item-template">
+    <li class="movie-card watched-movie-card">
+      <button class="delete-movie" type="button" aria-label="Hold to delete movie" title="Hold to delete">
+        <span class="delete-movie-ring" aria-hidden="true"></span>
+        <img src="assets/icons/trash.svg" alt="">
+      </button>
+      <div class="movie-poster" aria-hidden="true"></div>
+      <div class="movie-content">
+        <div class="movie-main">
+          <h3 class="movie-title"></h3>
+          <p class="movie-meta"></p>
+          <p class="watch-history"></p>
+        </div>
+        <button class="secondary readd-movie" type="button">Re-add to voting</button>
+      </div>
+    </li>
+  </template>
+
+  <script src="app.js?v=watched-archive-1" type="module"></script>
 </body>
 
 </html>

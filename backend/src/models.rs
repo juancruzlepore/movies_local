@@ -23,6 +23,10 @@ pub struct Movie {
     pub runtime_minutes: Option<u32>,
     #[serde(default)]
     pub last_watched_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub times_watched: u32,
+    #[serde(default)]
+    pub in_voting: Option<bool>,
     #[serde(default, alias = "votes")]
     pub points: f32,
     #[serde(

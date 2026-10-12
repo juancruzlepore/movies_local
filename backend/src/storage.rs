@@ -19,6 +19,7 @@ pub const ANNE_BONUS_VOTE_POINTS: f32 = 0.5;
 pub enum VoteOutcome {
     PointsAwarded(Movie),
     LimitReached { limit: usize },
+    NotInVoting,
     NotFound,
 }
 
@@ -220,6 +221,8 @@ impl Storage {
             plot: request.plot,
             runtime_minutes: request.runtime_minutes,
             last_watched_at: None,
+            times_watched: 0,
+            in_voting: Some(true),
             points: 0.0,
             vote_history: Vec::new(),
             created_at: Utc::now(),
@@ -243,6 +246,26 @@ impl Storage {
         }
     }
 
+    pub async fn remove_movie(&self, household_id: Uuid, id: Uuid) -> Result<bool, StorageError> {
+        let (removed, snapshot) = {
+            let mut guard = self.inner.write();
+            if let Some(household) = guard.households.iter_mut().find(|h| h.id == household_id) {
+                let original_len = household.movies.len();
+                household.movies.retain(|movie| movie.id != id);
+                let removed = household.movies.len() != original_len;
+                (removed, removed.then(|| guard.clone()))
+            } else {
+                (false, None)
+            }
+        };
+
+        if let Some(data) = snapshot {
+            self.persist(&data).await?;
+        }
+
+        Ok(removed)
+    }
+
     pub async fn vote(
         &self,
         household_id: Uuid,
@@ -262,18 +285,22 @@ impl Storage {
                 if votes_today >= limit {
                     (VoteOutcome::LimitReached { limit }, None)
                 } else if let Some(movie) = household.movies.iter_mut().find(|item| item.id == id) {
-                    let points_awarded = points_for_vote(votes_today, &normalised_voter);
+                    if movie.in_voting == Some(false) {
+                        (VoteOutcome::NotInVoting, None)
+                    } else {
+                        let points_awarded = points_for_vote(votes_today, &normalised_voter);
 
-                    movie.vote_history.push(Vote {
-                        voter: trimmed_voter.clone(),
-                        voted_at: Some(Utc::now()),
-                        points_awarded: Some(points_awarded),
-                    });
-                    recalculate_points(movie);
-                    (
-                        VoteOutcome::PointsAwarded(movie.clone()),
-                        Some(guard.clone()),
-                    )
+                        movie.vote_history.push(Vote {
+                            voter: trimmed_voter.clone(),
+                            voted_at: Some(Utc::now()),
+                            points_awarded: Some(points_awarded),
+                        });
+                        recalculate_points(movie);
+                        (
+                            VoteOutcome::PointsAwarded(movie.clone()),
+                            Some(guard.clone()),
+                        )
+                    }
                 } else {
                     (VoteOutcome::NotFound, None)
                 }
@@ -298,7 +325,38 @@ impl Storage {
             let mut guard = self.inner.write();
             if let Some(household) = guard.households.iter_mut().find(|h| h.id == household_id) {
                 if let Some(movie) = household.movies.iter_mut().find(|item| item.id == id) {
-                    movie.last_watched_at = Some(Utc::now());
+                    if movie.in_voting != Some(false) {
+                        movie.last_watched_at = Some(Utc::now());
+                        movie.times_watched = movie.times_watched.saturating_add(1);
+                        movie.in_voting = Some(false);
+                    }
+                    recalculate_points(movie);
+                    (Some(movie.clone()), Some(guard.clone()))
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            }
+        };
+
+        if let Some(data) = snapshot {
+            self.persist(&data).await?;
+        }
+
+        Ok(movie)
+    }
+
+    pub async fn readd_to_voting(
+        &self,
+        household_id: Uuid,
+        id: Uuid,
+    ) -> Result<Option<Movie>, StorageError> {
+        let (movie, snapshot) = {
+            let mut guard = self.inner.write();
+            if let Some(household) = guard.households.iter_mut().find(|h| h.id == household_id) {
+                if let Some(movie) = household.movies.iter_mut().find(|item| item.id == id) {
+                    movie.in_voting = Some(true);
                     recalculate_points(movie);
                     (Some(movie.clone()), Some(guard.clone()))
                 } else {
@@ -343,7 +401,13 @@ impl Storage {
 }
 
 fn normalise_movie(mut movie: Movie) -> Movie {
+    if movie.times_watched == 0 && movie.last_watched_at.is_some() {
+        movie.times_watched = 1;
+    }
     recalculate_points(&mut movie);
+    if movie.in_voting.is_none() {
+        movie.in_voting = Some(movie.last_watched_at.is_none() || movie.points > 0.0);
+    }
     movie
 }
 
@@ -515,6 +579,8 @@ mod tests {
         assert_eq!(movie.id, all_movies[0].id);
         assert_eq!(movie.runtime_minutes, Some(136));
         assert_eq!(all_movies[0].runtime_minutes, Some(136));
+        assert_eq!(all_movies[0].times_watched, 0);
+        assert_eq!(all_movies[0].in_voting, Some(true));
 
         let persisted = fs::read(&path).await.expect("read persisted file");
         assert!(!persisted.is_empty());
@@ -525,6 +591,82 @@ mod tests {
         assert_eq!(saved_movie.title, "The Matrix");
         assert_eq!(saved_movie.imdb_id, "tt0133093");
         assert_eq!(saved_movie.runtime_minutes, Some(136));
+    }
+
+    #[test]
+    fn normalises_legacy_watch_data_into_the_watched_archive() {
+        let watched_at = Utc::now();
+        let movie: Movie = serde_json::from_value(serde_json::json!({
+            "id": Uuid::new_v4(),
+            "title": "Arrival",
+            "imdb_id": "tt2543164",
+            "added_by": "Louise",
+            "last_watched_at": watched_at,
+            "points": 7,
+            "vote_history": [],
+            "created_at": Utc::now()
+        }))
+        .expect("legacy movie");
+
+        let normalised = normalise_movie(movie);
+        assert_eq!(normalised.times_watched, 1);
+        assert_eq!(normalised.in_voting, Some(false));
+        assert_eq!(normalised.points, 0.0);
+    }
+
+    #[test]
+    fn keeps_legacy_rewatch_votes_in_the_voting_queue() {
+        let watched_at = Utc::now() - chrono::Duration::days(1);
+        let movie: Movie = serde_json::from_value(serde_json::json!({
+            "id": Uuid::new_v4(),
+            "title": "Arrival",
+            "imdb_id": "tt2543164",
+            "added_by": "Louise",
+            "last_watched_at": watched_at,
+            "points": 0,
+            "vote_history": [{
+                "voter": "Ian",
+                "voted_at": Utc::now(),
+                "points_awarded": 1.5
+            }],
+            "created_at": Utc::now()
+        }))
+        .expect("legacy rewatch movie");
+
+        let normalised = normalise_movie(movie);
+        assert_eq!(normalised.times_watched, 1);
+        assert_eq!(normalised.in_voting, Some(true));
+        assert_eq!(normalised.points, BIG_VOTE_POINTS);
+    }
+
+    #[tokio::test]
+    async fn remove_movie_persists_and_reports_missing_movies() {
+        let path = temp_storage_path();
+        let storage = Storage::initialise_local(path.clone())
+            .await
+            .expect("init storage");
+        let household = storage
+            .create_household("Test House".to_string())
+            .await
+            .expect("create household");
+        let movie = storage
+            .add(household.id, sample_movie_request())
+            .await
+            .expect("add movie");
+
+        assert!(storage
+            .remove_movie(household.id, movie.id)
+            .await
+            .expect("remove movie"));
+        assert!(storage.list(household.id).expect("list movies").is_empty());
+        assert!(!storage
+            .remove_movie(household.id, movie.id)
+            .await
+            .expect("remove missing movie"));
+
+        let persisted = fs::read(&path).await.expect("read persisted file");
+        let parsed: AppData = serde_json::from_slice(&persisted).expect("parse persisted data");
+        assert!(parsed.households[0].movies.is_empty());
     }
 
     #[tokio::test]
@@ -750,6 +892,8 @@ mod tests {
             .expect("movie exists");
 
         assert!(watched.last_watched_at.is_some());
+        assert_eq!(watched.times_watched, 1);
+        assert_eq!(watched.in_voting, Some(false));
         assert_eq!(watched.points, 0.0);
         assert_eq!(watched.vote_history.len(), 1);
 
@@ -758,9 +902,26 @@ mod tests {
         let saved_movie = &parsed.households[0].movies[0];
         assert_eq!(saved_movie.points, 0.0);
         assert!(saved_movie.last_watched_at.is_some());
+        assert_eq!(saved_movie.times_watched, 1);
+        assert_eq!(saved_movie.in_voting, Some(false));
         assert_eq!(saved_movie.vote_history.len(), 1);
 
-        // Votes after watch are counted again
+        let archived_vote = storage
+            .vote(household.id, movie.id, "trinity".to_string())
+            .await
+            .expect("archived vote request");
+        assert!(matches!(archived_vote, VoteOutcome::NotInVoting));
+
+        let readded = storage
+            .readd_to_voting(household.id, movie.id)
+            .await
+            .expect("re-add movie")
+            .expect("movie exists");
+        assert_eq!(readded.in_voting, Some(true));
+        assert_eq!(readded.times_watched, 1);
+        assert!(readded.last_watched_at.is_some());
+
+        // Votes after re-adding are counted in a fresh voting round.
         let follow_up = storage
             .vote(household.id, movie.id, "trinity".to_string())
             .await
@@ -773,6 +934,17 @@ mod tests {
 
         assert_eq!(follow_up.points, BIG_VOTE_POINTS);
         assert!(follow_up.last_watched_at.is_some());
+        assert_eq!(follow_up.times_watched, 1);
+        assert_eq!(follow_up.in_voting, Some(true));
         assert_eq!(follow_up.vote_history.len(), 2);
+
+        let watched_again = storage
+            .mark_watched(household.id, movie.id)
+            .await
+            .expect("mark watched again")
+            .expect("movie exists");
+        assert_eq!(watched_again.times_watched, 2);
+        assert_eq!(watched_again.in_voting, Some(false));
+        assert_eq!(watched_again.points, 0.0);
     }
 }

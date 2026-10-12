@@ -9,6 +9,7 @@ const ANNE_NAME = 'anne';
 const BIG_VOTE_POINTS = 1.5;
 const SMALL_VOTE_POINTS = 1;
 const ANNE_BONUS_VOTE_POINTS = 0.5;
+const DELETE_HOLD_MS = 1000;
 const LOCAL_PREVIEW_POSTERS = {
   tt6710474: 'assets/poster-multiverse.png',
   tt9362722: 'assets/poster-animated-city.png',
@@ -26,14 +27,18 @@ const searchResultsList = document.querySelector('#search-results');
 const searchFeedback = document.querySelector('#search-feedback');
 const moviesListByPoints = document.querySelector('#movies-list-by-points');
 const moviesListByRecent = document.querySelector('#movies-list-by-recent');
+const watchedMoviesList = document.querySelector('#watched-movies-list');
+const watchedCount = document.querySelector('#watched-count');
 const refreshMoviesButton = document.querySelector('#refresh-movies');
 const moviesFilterInput = document.querySelector('#movies-filter');
 const dailyVoteCounter = document.querySelector('#daily-vote-count');
+const votingDayBalance = document.querySelector('#voting-day-balance');
 const tabButtons = Array.from(document.querySelectorAll('.tab-button'));
 const tabPanels = Array.from(document.querySelectorAll('.tab-panel'));
 
 const resultTemplate = document.querySelector('#result-item-template');
 const movieTemplate = document.querySelector('#movie-item-template');
+const watchedMovieTemplate = document.querySelector('#watched-movie-item-template');
 
 const householdScreen = document.querySelector('#household-screen');
 const householdList = document.querySelector('#household-list');
@@ -459,6 +464,7 @@ async function fetchMovies(options = {}) {
     latestMovies = parseArrayPayload(bodyText, 'movies');
     renderMovies(latestMovies);
     updateDailyVoteCount(latestMovies);
+    updateVotingDayBalance(latestMovies);
     if (showLoading) {
       setFeedback('');
     }
@@ -468,12 +474,17 @@ async function fetchMovies(options = {}) {
     if (dailyVoteCounter) {
       dailyVoteCounter.textContent = 'Unable to load vote history right now.';
     }
+    if (votingDayBalance) votingDayBalance.textContent = '';
   }
 }
 
 function renderMovies(movies = []) {
+  const votingMovies = movies.filter(isMovieInVoting);
+  const watchedMovies = movies.filter((movie) => !isMovieInVoting(movie));
   const filter = activeMovieFilter;
-  const filteredMovies = !filter ? movies : movies.filter((movie) => movieMatchesFilter(movie, filter));
+  const filteredMovies = !filter
+    ? votingMovies
+    : votingMovies.filter((movie) => movieMatchesFilter(movie, filter));
 
   const moviesByPoints = [...filteredMovies].sort((a, b) => {
     const pointsDiff = (getPoints(b) - getPoints(a));
@@ -497,6 +508,12 @@ function renderMovies(movies = []) {
   const filtered = Boolean(filter);
   renderMovieList(moviesListByPoints, moviesByPoints, { filtered });
   renderMovieList(moviesListByRecent, moviesByRecent, { filtered });
+  renderWatchedMovies(watchedMovies);
+}
+
+function isMovieInVoting(movie = {}) {
+  if (typeof movie.in_voting === 'boolean') return movie.in_voting;
+  return !movie.last_watched_at;
 }
 
 function normaliseFilterValue(value = '') {
@@ -541,6 +558,37 @@ function renderMovieList(container, movies, options = {}) {
   }
 
   container.append(fragment);
+}
+
+function renderWatchedMovies(movies = []) {
+  if (!watchedMoviesList || !watchedMovieTemplate) return;
+
+  const sortedMovies = [...movies].sort((a, b) => {
+    const timeA = a.last_watched_at ? new Date(a.last_watched_at).getTime() : 0;
+    const timeB = b.last_watched_at ? new Date(b.last_watched_at).getTime() : 0;
+    return timeB - timeA;
+  });
+
+  if (watchedCount) {
+    watchedCount.textContent = String(sortedMovies.length);
+    watchedCount.setAttribute(
+      'aria-label',
+      `${sortedMovies.length} watched ${sortedMovies.length === 1 ? 'title' : 'titles'}`,
+    );
+  }
+
+  watchedMoviesList.innerHTML = '';
+  if (!sortedMovies.length) {
+    const empty = document.createElement('p');
+    empty.className = 'movie-empty';
+    empty.textContent = 'Nothing watched yet. Finished picks will move here.';
+    watchedMoviesList.append(empty);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  sortedMovies.forEach((movie) => fragment.append(buildWatchedMovieElement(movie)));
+  watchedMoviesList.append(fragment);
 }
 
 function activateTab(panelId) {
@@ -620,46 +668,7 @@ function setupTabs() {
 
 function buildMovieElement(movie) {
   const element = movieTemplate.content.cloneNode(true);
-  const movieCard = element.querySelector('.movie-card');
-  if (movieCard && movie.id) {
-    movieCard.dataset.movieId = movie.id;
-  }
-
-  element.querySelector('.movie-title').textContent = movie.title;
-
-  const metaParts = [];
-  if (movie.year) metaParts.push(movie.year);
-  if (movie.media_type) metaParts.push(capitalise(movie.media_type));
-  const runtime = formatRuntime(movie.runtime_minutes);
-  if (runtime) metaParts.push(runtime);
-  element.querySelector('.movie-meta').textContent = metaParts.join(' • ');
-
-  const posterContainer = element.querySelector('.movie-poster');
-  const posterUrls = resolveMoviePosterCandidates(movie);
-  if (posterUrls.length) {
-    posterContainer.innerHTML = '';
-    const img = document.createElement('img');
-    img.alt = `${movie.title} Poster`;
-    img.loading = 'lazy';
-    img.decoding = 'async';
-    let posterIndex = 0;
-    img.addEventListener('error', () => {
-      posterIndex += 1;
-      if (posterIndex < posterUrls.length) {
-        img.src = posterUrls[posterIndex];
-        return;
-      }
-      showPosterPlaceholder(posterContainer);
-    });
-    img.src = posterUrls[posterIndex];
-    posterContainer.appendChild(img);
-    posterContainer.removeAttribute('aria-hidden');
-    posterContainer.classList.remove('movie-poster--placeholder');
-  } else {
-    posterContainer.textContent = 'No poster yet';
-    posterContainer.setAttribute('aria-hidden', 'true');
-    posterContainer.classList.add('movie-poster--placeholder');
-  }
+  populateMovieCard(element, movie);
 
   const voteButton = element.querySelector('.vote-button');
   const pointsLabel = element.querySelector('.movie-points');
@@ -679,24 +688,160 @@ function buildMovieElement(movie) {
 
   const markWatchedButton = element.querySelector('.mark-watched');
   if (markWatchedButton) {
-    const watchedToday = isWatchedToday(movie.last_watched_at);
-    if (watchedToday) {
-      markWatchedButton.textContent = 'Watched ✓';
-      markWatchedButton.disabled = true;
-      markWatchedButton.setAttribute('aria-disabled', 'true');
-      markWatchedButton.title = 'Already logged for today';
-    } else {
-      markWatchedButton.textContent = 'Mark as watched';
-      markWatchedButton.disabled = false;
-      markWatchedButton.removeAttribute('aria-disabled');
-      markWatchedButton.title = 'Reset points and log a rewatch';
-      markWatchedButton.addEventListener('click', () =>
-        markMovieWatched(movie.id, markWatchedButton),
-      );
-    }
+    markWatchedButton.title = 'Move to watched and reset points';
+    markWatchedButton.addEventListener('click', () =>
+      markMovieWatched(movie.id, markWatchedButton),
+    );
+  }
+
+  const deleteButton = element.querySelector('.delete-movie');
+  if (deleteButton) {
+    deleteButton.setAttribute('aria-label', `Hold to delete ${movie.title}`);
+    setupLongPressDelete(deleteButton, movie);
   }
 
   return element;
+}
+
+function buildWatchedMovieElement(movie) {
+  const element = watchedMovieTemplate.content.cloneNode(true);
+  populateMovieCard(element, movie);
+
+  const historyLabel = element.querySelector('.watch-history');
+  if (historyLabel) historyLabel.textContent = describeWatchHistory(movie);
+
+  const readdButton = element.querySelector('.readd-movie');
+  if (readdButton) {
+    readdButton.addEventListener('click', () =>
+      readdMovieToVoting(movie, readdButton),
+    );
+  }
+
+  const deleteButton = element.querySelector('.delete-movie');
+  if (deleteButton) {
+    deleteButton.setAttribute('aria-label', `Hold to delete ${movie.title}`);
+    setupLongPressDelete(deleteButton, movie);
+  }
+
+  return element;
+}
+
+function populateMovieCard(element, movie) {
+  const movieCard = element.querySelector('.movie-card');
+  if (movieCard && movie.id) movieCard.dataset.movieId = movie.id;
+
+  element.querySelector('.movie-title').textContent = movie.title;
+
+  const metaParts = [];
+  if (movie.year) metaParts.push(movie.year);
+  if (movie.media_type) metaParts.push(capitalise(movie.media_type));
+  const runtime = formatRuntime(movie.runtime_minutes);
+  if (runtime) metaParts.push(runtime);
+  element.querySelector('.movie-meta').textContent = metaParts.join(' • ');
+
+  const posterContainer = element.querySelector('.movie-poster');
+  const posterUrls = resolveMoviePosterCandidates(movie);
+  if (!posterUrls.length) {
+    showPosterPlaceholder(posterContainer);
+    return;
+  }
+
+  posterContainer.innerHTML = '';
+  const img = document.createElement('img');
+  img.alt = `${movie.title} poster`;
+  img.loading = 'lazy';
+  img.decoding = 'async';
+  let posterIndex = 0;
+  img.addEventListener('error', () => {
+    posterIndex += 1;
+    if (posterIndex < posterUrls.length) {
+      img.src = posterUrls[posterIndex];
+      return;
+    }
+    showPosterPlaceholder(posterContainer);
+  });
+  img.src = posterUrls[posterIndex];
+  posterContainer.appendChild(img);
+  posterContainer.removeAttribute('aria-hidden');
+  posterContainer.classList.remove('movie-poster--placeholder');
+}
+
+function setupLongPressDelete(button, movie) {
+  let animationFrame = 0;
+  let startedAt = 0;
+  let deleting = false;
+
+  const reset = () => {
+    cancelAnimationFrame(animationFrame);
+    animationFrame = 0;
+    startedAt = 0;
+    button.classList.remove('is-holding');
+    button.style.setProperty('--delete-progress', '0deg');
+  };
+
+  const tick = (now) => {
+    if (!startedAt || deleting) return;
+    const elapsed = now - startedAt;
+    const progress = Math.min(elapsed / DELETE_HOLD_MS, 1);
+    button.style.setProperty('--delete-progress', `${progress * 360}deg`);
+    if (progress >= 1) {
+      deleting = true;
+      removeMovie(movie, button).finally(reset);
+      return;
+    }
+    animationFrame = requestAnimationFrame(tick);
+  };
+
+  const start = (event) => {
+    if (deleting || button.disabled) return;
+    if (event.type === 'pointerdown' && event.button !== 0) return;
+    if (event.type === 'keydown' && event.key !== ' ' && event.key !== 'Enter') return;
+    event.preventDefault();
+    if (startedAt) return;
+    startedAt = performance.now();
+    button.classList.add('is-holding');
+    animationFrame = requestAnimationFrame(tick);
+  };
+
+  const cancel = (event) => {
+    if (event?.type === 'keyup' && event.key !== ' ' && event.key !== 'Enter') return;
+    if (!deleting) reset();
+  };
+
+  button.addEventListener('pointerdown', start);
+  button.addEventListener('pointerup', cancel);
+  button.addEventListener('pointercancel', cancel);
+  button.addEventListener('pointerleave', cancel);
+  button.addEventListener('keydown', start);
+  button.addEventListener('keyup', cancel);
+  button.addEventListener('blur', cancel);
+  button.addEventListener('contextmenu', (event) => event.preventDefault());
+  button.addEventListener('click', (event) => event.preventDefault());
+}
+
+async function removeMovie(movie, button) {
+  button.disabled = true;
+  button.setAttribute('aria-disabled', 'true');
+  setFeedback(`Deleting ${movie.title}…`);
+
+  try {
+    if (!currentHouseholdId) throw new Error('No household selected');
+    const response = await fetch(
+      `${API_BASE}/households/${currentHouseholdId}/movies/${movie.id}`,
+      { method: 'DELETE' },
+    );
+    if (!response.ok) {
+      const problem = await safeJson(response);
+      throw new Error(problem?.message || `Delete failed with ${response.status}`);
+    }
+    setFeedback(`${movie.title} was deleted.`);
+    await fetchMovies({ showLoading: false });
+  } catch (error) {
+    console.error(error);
+    setFeedback(error.message || 'Unable to delete the movie.');
+    button.disabled = false;
+    button.removeAttribute('aria-disabled');
+  }
 }
 
 async function searchMovies(query, mediaType) {
@@ -910,6 +1055,24 @@ function formatRuntime(value) {
   return `${minutes}m`;
 }
 
+function describeWatchHistory(movie = {}) {
+  const rawCount = Number(movie.times_watched);
+  const timesWatched = Number.isFinite(rawCount) && rawCount > 0
+    ? Math.floor(rawCount)
+    : (movie.last_watched_at ? 1 : 0);
+  const countLabel = timesWatched === 1
+    ? 'Watched once'
+    : `Watched ${timesWatched} times`;
+  const watchedAt = new Date(movie.last_watched_at);
+  if (Number.isNaN(watchedAt.getTime())) return countLabel;
+
+  const dateLabel = new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(watchedAt);
+  return `${countLabel} • Last watched ${dateLabel}`;
+}
+
 function updateDailyVoteCount(movies = []) {
   if (!dailyVoteCounter) return;
 
@@ -929,17 +1092,89 @@ function updateDailyVoteCount(movies = []) {
       : baseMessage;
 }
 
-function isWatchedToday(value) {
-  if (!value) return false;
-  const watchedDate = new Date(value);
-  if (Number.isNaN(watchedDate.getTime())) return false;
+function updateVotingDayBalance(movies = []) {
+  if (!votingDayBalance) return;
 
-  const today = new Date();
-  return (
-    watchedDate.getFullYear() === today.getFullYear() &&
-    watchedDate.getMonth() === today.getMonth() &&
-    watchedDate.getDate() === today.getDate()
+  const voter = getDisplayName();
+  const household = allHouseholds.find((item) => item.id === currentHouseholdId);
+  const members = Array.isArray(household?.users) ? household.users : [];
+  if (!voter || members.length < 2) {
+    votingDayBalance.textContent = '';
+    return;
+  }
+
+  const activeName = normaliseName(voter);
+  const activeMember = members.find((member) => normaliseName(member) === activeName);
+  const otherMembers = members.filter((member) => normaliseName(member) !== activeName);
+  if (!activeMember || !otherMembers.length) {
+    votingDayBalance.textContent = '';
+    return;
+  }
+
+  const daysByVoter = countDistinctVotingDaysByVoter(movies);
+  const activeDays = daysByVoter.get(activeName) || 0;
+
+  if (members.length === 2) {
+    const otherName = otherMembers[0];
+    const otherDays = daysByVoter.get(normaliseName(otherName)) || 0;
+    votingDayBalance.textContent = describeTwoPersonVotingBalance(
+      activeDays,
+      otherDays,
+      otherName,
+    );
+    return;
+  }
+
+  const highestOtherDays = Math.max(
+    ...otherMembers.map((member) => daysByVoter.get(normaliseName(member)) || 0),
   );
+  votingDayBalance.textContent = describeGroupVotingBalance(activeDays, highestOtherDays);
+}
+
+function countDistinctVotingDaysByVoter(movies = []) {
+  const daysByVoter = new Map();
+
+  movies.forEach((movie) => {
+    getVoteHistory(movie).forEach((vote) => {
+      if (!vote?.voter || !vote?.voted_at) return;
+      const votedAt = new Date(vote.voted_at);
+      if (Number.isNaN(votedAt.getTime())) return;
+
+      const voter = normaliseName(vote.voter);
+      if (!voter) return;
+      const localDay = [
+        votedAt.getFullYear(),
+        String(votedAt.getMonth() + 1).padStart(2, '0'),
+        String(votedAt.getDate()).padStart(2, '0'),
+      ].join('-');
+
+      if (!daysByVoter.has(voter)) daysByVoter.set(voter, new Set());
+      daysByVoter.get(voter).add(localDay);
+    });
+  });
+
+  return new Map(
+    Array.from(daysByVoter, ([voter, days]) => [voter, days.size]),
+  );
+}
+
+function describeTwoPersonVotingBalance(activeDays, otherDays, otherName) {
+  const difference = activeDays - otherDays;
+  if (difference === 0) return `You’ve voted on as many days as ${otherName}.`;
+  const dayLabel = Math.abs(difference) === 1 ? 'day' : 'days';
+  if (difference > 0) {
+    return `You’ve voted on ${difference} more ${dayLabel} than ${otherName}.`;
+  }
+  return `You’ve voted on ${Math.abs(difference)} fewer ${dayLabel} than ${otherName}.`;
+}
+
+function describeGroupVotingBalance(activeDays, highestOtherDays) {
+  const difference = activeDays - highestOtherDays;
+  if (difference > 0) return 'You’ve voted on the most days.';
+  if (difference === 0) return 'You’re tied for the most voting days.';
+  const gap = Math.abs(difference);
+  const dayLabel = gap === 1 ? 'day' : 'days';
+  return `You’ve voted on ${gap} fewer ${dayLabel} than the most active voter.`;
 }
 
 function countVotesForToday(movies = [], voter) {
@@ -1072,7 +1307,7 @@ async function markMovieWatched(movieId, button) {
   button.textContent = 'Updating…';
   button.title = '';
   button.setAttribute('aria-disabled', 'true');
-  setFeedback('Resetting points…');
+  setFeedback('Moving to watched…');
 
   try {
     if (!currentHouseholdId) {
@@ -1090,13 +1325,44 @@ async function markMovieWatched(movieId, button) {
       throw new Error(problem?.message || `Watch failed with ${response.status}`);
     }
 
-    setFeedback('Marked as watched!');
+    setFeedback('Moved to watched.');
     await fetchMovies({ showLoading: false });
   } catch (error) {
     console.error(error);
     setFeedback(error.message || 'Unable to mark as watched.');
     button.disabled = false;
     button.textContent = 'Mark as watched';
+    button.removeAttribute('aria-disabled');
+  }
+}
+
+async function readdMovieToVoting(movie, button) {
+  if (!movie?.id || !button) return;
+
+  button.disabled = true;
+  button.textContent = 'Re-adding…';
+  button.setAttribute('aria-disabled', 'true');
+  setFeedback(`Re-adding ${movie.title} to voting…`);
+
+  try {
+    if (!currentHouseholdId) throw new Error('No household selected');
+    const response = await fetch(
+      `${API_BASE}/households/${currentHouseholdId}/movies/${movie.id}/readd`,
+      { method: 'POST' },
+    );
+
+    if (!response.ok) {
+      const problem = await safeJson(response);
+      throw new Error(problem?.message || `Re-add failed with ${response.status}`);
+    }
+
+    setFeedback(`${movie.title} is back in voting.`);
+    await fetchMovies({ showLoading: false });
+  } catch (error) {
+    console.error(error);
+    setFeedback(error.message || 'Unable to re-add the movie.');
+    button.disabled = false;
+    button.textContent = 'Re-add to voting';
     button.removeAttribute('aria-disabled');
   }
 }
@@ -1682,6 +1948,7 @@ initApp();
 if (displayNameInput) {
   displayNameInput.addEventListener('input', () => {
     updateDailyVoteCount(latestMovies);
+    updateVotingDayBalance(latestMovies);
   });
 }
 

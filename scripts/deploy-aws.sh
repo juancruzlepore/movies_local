@@ -59,7 +59,7 @@ if [[ "$poster_status" != "307" && "$poster_status" != "302" ]]; then
 fi
 
 frontend_html="$(curl --fail --silent --show-error "$FRONTEND_URL/")"
-if [[ "$frontend_html" != *'app.js?v=poster-fallback-1'* ]]; then
+if [[ "$frontend_html" != *'app.js?v=watched-archive-1'* ]]; then
   echo "Frontend did not expose the expected release marker" >&2
   exit 1
 fi

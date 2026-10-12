@@ -350,7 +350,8 @@ a:focus-visible {
 .secondary,
 .icon-button,
 .back-button,
-.mark-watched {
+.mark-watched,
+.readd-movie {
   border: 0;
   font-weight: 700;
 }
@@ -589,6 +590,7 @@ select {
   gap: 28px;
   padding: 24px 0 0;
   border-bottom: 1px solid var(--line);
+  overflow-x: auto;
 }
 
 .tab-button {
@@ -614,6 +616,25 @@ select {
   background: var(--ember);
 }
 
+.tab-count {
+  min-width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  margin-left: 5px;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: #8e8378;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.tab-button[aria-selected="true"] .tab-count {
+  border-color: rgba(231, 92, 56, 0.5);
+  color: var(--ember-hover);
+}
+
 .tab-panel {
   padding-top: 48px;
 }
@@ -633,11 +654,42 @@ select {
   line-height: 1;
 }
 
-.vote-counter {
-  min-height: 20px;
+.vote-summary {
   margin: 10px 0 0;
+}
+
+.vote-counter,
+.voting-day-balance {
+  margin: 0;
   color: var(--paper-muted);
   font-size: 13px;
+}
+
+.voting-day-balance {
+  min-height: 16px;
+  margin-top: 2px;
+  color: #8e8378;
+  font-size: 11px;
+}
+
+.watched-header {
+  align-items: flex-start;
+}
+
+.watched-header .section-number {
+  margin-bottom: 10px;
+}
+
+.watched-intro {
+  max-width: 520px;
+  margin: 12px 0 0;
+  color: var(--paper-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.watched-list {
+  width: min(100%, 900px);
 }
 
 .section-controls {
@@ -722,7 +774,67 @@ select {
 }
 
 .movie-card {
+  position: relative;
   grid-template-columns: 74px minmax(0, 1fr);
+}
+
+.delete-movie {
+  display: none;
+}
+
+@media (min-width: 901px) and (hover: hover) and (pointer: fine) {
+  .delete-movie {
+    --delete-progress: 0deg;
+    position: absolute;
+    top: 9px;
+    right: 0;
+    z-index: 2;
+    width: 30px;
+    height: 30px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--ink);
+    color: var(--paper-muted);
+    opacity: 0;
+    transform: scale(0.88);
+    transition: opacity 150ms ease, transform 150ms ease, color 150ms ease;
+  }
+
+  .movie-card:hover .delete-movie,
+  .movie-card:focus-within .delete-movie {
+    opacity: 0.62;
+    transform: scale(1);
+  }
+
+  .movie-card .delete-movie:hover,
+  .movie-card .delete-movie:focus-visible,
+  .delete-movie.is-holding {
+    opacity: 1;
+    color: var(--ember-hover);
+  }
+
+  .delete-movie-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: conic-gradient(var(--ember) var(--delete-progress), var(--line) 0);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 0);
+    mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 0);
+  }
+
+  .delete-movie img {
+    width: 13px;
+    height: 13px;
+    filter: invert(82%) sepia(13%) saturate(350%);
+    pointer-events: none;
+  }
+
+  .delete-movie.is-holding img {
+    filter: invert(48%) sepia(91%) saturate(1740%) hue-rotate(337deg) brightness(101%);
+  }
 }
 
 .movie-poster,
@@ -815,6 +927,21 @@ select {
 
 .mark-watched:disabled {
   color: var(--success);
+}
+
+.movie-main .watch-history {
+  margin-top: 10px;
+  color: var(--success);
+  font-size: 11px;
+}
+
+.readd-movie {
+  white-space: nowrap;
+}
+
+.readd-movie:hover:not(:disabled) {
+  border-color: var(--ember);
+  color: var(--ember-hover);
 }
 
 .movie-points {
@@ -1103,8 +1230,13 @@ select {
   }
 
   .movie-actions,
-  .mark-watched {
+  .mark-watched,
+  .readd-movie {
     grid-column: 1;
+  }
+
+  .readd-movie {
+    justify-self: start;
   }
 
   .search-group {

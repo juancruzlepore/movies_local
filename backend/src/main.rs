@@ -22,6 +22,7 @@ use models::{
     Household, HouseholdRequest, Movie, NewMovie, SearchParams, SearchResponse, SearchResultItem,
     Vote, VoteRequest,
 };
+use parking_lot::RwLock;
 use response::ApiResponse;
 use serde::Deserialize;
 use storage::{Storage, StorageConfig, VoteOutcome, SMALL_VOTE_POINTS};
@@ -36,7 +37,7 @@ struct AppState {
     storage: Arc<Storage>,
     client: reqwest::Client,
     omdb_api_key: Option<String>,
-    mock_movies: Option<Vec<Movie>>,
+    mock_movies: Option<Arc<RwLock<Vec<Movie>>>>,
 }
 
 #[tokio::main]
@@ -83,7 +84,7 @@ async fn main() -> Result<(), anyhow::Error> {
         client,
         omdb_api_key,
         mock_movies: if use_mock_data {
-            Some(build_mock_movies())
+            Some(Arc::new(RwLock::new(build_mock_movies())))
         } else {
             None
         },
@@ -91,7 +92,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
-        .allow_methods([Method::GET, Method::POST])
+        .allow_methods([Method::GET, Method::POST, Method::DELETE])
         .allow_headers(Any);
 
     let app = Router::new()
@@ -113,6 +114,14 @@ async fn main() -> Result<(), anyhow::Error> {
         .route(
             "/households/:household_id/movies/:id/watch",
             post(mark_watched),
+        )
+        .route(
+            "/households/:household_id/movies/:id/readd",
+            post(readd_movie),
+        )
+        .route(
+            "/households/:household_id/movies/:id",
+            axum::routing::delete(remove_movie),
         )
         .route("/search", get(search_movies))
         .route("/posters/:imdb_id", get(resolve_poster))
@@ -207,7 +216,7 @@ async fn list_movies(
     Path(household_id): Path<Uuid>,
 ) -> Result<ApiResponse<Vec<Movie>>, AppError> {
     if let Some(mock_movies) = &state.mock_movies {
-        return Ok(ApiResponse::ok(mock_movies.clone()));
+        return Ok(ApiResponse::ok(mock_movies.read().clone()));
     }
 
     let mut movies = state.storage.list(household_id)?;
@@ -256,6 +265,9 @@ async fn vote_movie(
                 limit
             )))
         }
+        VoteOutcome::NotInVoting => Err(AppError::BadRequest(
+            "movie must be re-added before voting".into(),
+        )),
         VoteOutcome::NotFound => Err(AppError::NotFound("movie not found".into())),
     }
 }
@@ -264,9 +276,65 @@ async fn mark_watched(
     State(state): State<AppState>,
     Path((household_id, id)): Path<(Uuid, Uuid)>,
 ) -> Result<ApiResponse<Movie>, AppError> {
+    if let Some(mock_movies) = &state.mock_movies {
+        let mut movies = mock_movies.write();
+        if let Some(movie) = movies.iter_mut().find(|movie| movie.id == id) {
+            if movie.in_voting != Some(false) {
+                movie.last_watched_at = Some(Utc::now());
+                movie.times_watched = movie.times_watched.saturating_add(1);
+                movie.in_voting = Some(false);
+                movie.points = 0.0;
+            }
+            return Ok(ApiResponse::ok(movie.clone()));
+        }
+        return Err(AppError::NotFound("movie not found".into()));
+    }
+
     match state.storage.mark_watched(household_id, id).await? {
         Some(movie) => Ok(ApiResponse::ok(movie)),
         None => Err(AppError::NotFound("movie not found".into())),
+    }
+}
+
+async fn readd_movie(
+    State(state): State<AppState>,
+    Path((household_id, id)): Path<(Uuid, Uuid)>,
+) -> Result<ApiResponse<Movie>, AppError> {
+    if let Some(mock_movies) = &state.mock_movies {
+        let mut movies = mock_movies.write();
+        if let Some(movie) = movies.iter_mut().find(|movie| movie.id == id) {
+            movie.in_voting = Some(true);
+            movie.points = 0.0;
+            return Ok(ApiResponse::ok(movie.clone()));
+        }
+        return Err(AppError::NotFound("movie not found".into()));
+    }
+
+    match state.storage.readd_to_voting(household_id, id).await? {
+        Some(movie) => Ok(ApiResponse::ok(movie)),
+        None => Err(AppError::NotFound("movie not found".into())),
+    }
+}
+
+async fn remove_movie(
+    State(state): State<AppState>,
+    Path((household_id, id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, AppError> {
+    if let Some(mock_movies) = &state.mock_movies {
+        let mut movies = mock_movies.write();
+        let original_len = movies.len();
+        movies.retain(|movie| movie.id != id);
+        return if movies.len() != original_len {
+            Ok(StatusCode::NO_CONTENT)
+        } else {
+            Err(AppError::NotFound("movie not found".into()))
+        };
+    }
+
+    if state.storage.remove_movie(household_id, id).await? {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(AppError::NotFound("movie not found".into()))
     }
 }
 
@@ -431,6 +499,8 @@ fn build_mock_movies() -> Vec<Movie> {
             plot: Some("An overwhelmed laundromat owner discovers the power to fight across universes.".to_string()),
             runtime_minutes: Some(139),
             last_watched_at: Some(now - ChronoDuration::hours(6)),
+            times_watched: 2,
+            in_voting: Some(false),
             points: eeaao_points,
             vote_history: eeaao_votes,
             created_at: now - ChronoDuration::days(1),
@@ -447,6 +517,8 @@ fn build_mock_movies() -> Vec<Movie> {
             plot: Some("Miles Morales teams up with Gwen Stacy and the Spider-Society on a multiversal mission.".to_string()),
             runtime_minutes: Some(140),
             last_watched_at: None,
+            times_watched: 0,
+            in_voting: Some(true),
             points: spiderverse_points,
             vote_history: spiderverse_votes,
             created_at: now - ChronoDuration::days(3),
@@ -463,6 +535,8 @@ fn build_mock_movies() -> Vec<Movie> {
             plot: Some("Fan favourites return to the tent for festive bakes.".to_string()),
             runtime_minutes: Some(60),
             last_watched_at: Some(now - ChronoDuration::days(2)),
+            times_watched: 4,
+            in_voting: Some(false),
             points: bakeoff_points,
             vote_history: bakeoff_votes,
             created_at: now - ChronoDuration::days(7),
